@@ -3,6 +3,7 @@
 -- * learns your recipes from the profession windows
 -- * scans the whole auction house itself
 -- * Auctionator support: on at first install when detected (/gg auctionator on|off)
+-- * top search bar: filter the list by recipe name or material names
 -- * one window, one tooltip (cost / sell price / profit), no other hooks
 ------------------------------------------------------------------------
 local GG = {}
@@ -332,6 +333,61 @@ local function SortResults()
 	end)
 end
 
+------------------------------------------------------------------------
+-- Optional search bar: filters the list by recipe name and by the names
+-- of any material the recipe uses (as shown in the row tooltip).
+------------------------------------------------------------------------
+local function KidsMatch(kids, text)
+	for _, k in ipairs(kids or {}) do
+		local node = k.node
+		if node then
+			if node.name and node.name:lower():find(text, 1, true) then return true end
+			if node.kids and KidsMatch(node.kids, text) then return true end
+		end
+	end
+	return false
+end
+
+local function ApplyFilter()
+	local text = GG.search
+	if not text or text == "" then
+		GG.view = GG.results or {}
+		return
+	end
+	local view = {}
+	for _, res in ipairs(GG.results or {}) do
+		if (res.name and res.name:lower():find(text, 1, true))
+			or (res.enchant and string.find("vellum", text, 1, true))
+			or KidsMatch(res.kids, text) then
+			view[#view + 1] = res
+		end
+	end
+	GG.view = view
+end
+
+function GG:RefreshList()
+	SortResults()
+	ApplyFilter()
+	self:UpdateList()
+	self:UpdateStatus()
+end
+
+function GG:SetSearch(text)
+	self.search = text and text:lower() or ""
+	self:SetSearchPrompt()
+	-- start from the top when the filter changes
+	local bar = _G["GreedyGoblinScrollScrollBar"]
+	if bar then bar:SetValue(0) end
+	self:RefreshList()
+end
+
+function GG:SetSearchPrompt()
+	local f = self.frame
+	if f and f.searchPrompt then
+		if (self.search or "") == "" then f.searchPrompt:Show() else f.searchPrompt:Hide() end
+	end
+end
+
 function GG:Compute()
 	BuildIndex()
 	local res = {}
@@ -339,9 +395,7 @@ function GG:Compute()
 		for _, r in ipairs(list) do res[#res + 1] = Evaluate(r) end
 	end
 	self.results = res
-	SortResults()
-	self:UpdateList()
-	self:UpdateStatus()
+	self:RefreshList()
 end
 
 ------------------------------------------------------------------------
@@ -640,6 +694,7 @@ function GG:SkinWindow(f)
 		if S.HandleButton and f.clearBtn then S:HandleButton(f.clearBtn) end
 		local bar = _G["GreedyGoblinScrollScrollBar"]
 		if bar and S.HandleScrollBar then S:HandleScrollBar(bar) end
+		if f.searchBox and S.HandleEditBox then S:HandleEditBox(f.searchBox) end
 		local tex = E.media and E.media.blankTex
 		if tex then
 			for _, row in ipairs(f.rows) do
@@ -789,6 +844,31 @@ function GG:CreateWindow()
 	close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -8, -8)
 	f.close = close
 
+	local searchBox = CreateFrame("EditBox", "GreedyGoblinSearch", f, "InputBoxTemplate")
+	searchBox:SetPoint("TOPLEFT", f, "TOPLEFT", 34, -32)
+	searchBox:SetWidth(260)
+	searchBox:SetHeight(24)
+	searchBox:SetAutoFocus(false)
+	searchBox:SetMaxLetters(48)
+	searchBox:SetScript("OnTextChanged", function(self)
+		GG:SetSearch(self:GetText() or "")
+	end)
+	searchBox:SetScript("OnEscapePressed", function(self)
+		if self:GetText() ~= "" then
+			self:SetText("")
+		else
+			self:ClearFocus()
+		end
+	end)
+	searchBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+	f.searchBox = searchBox
+
+	local searchPrompt = f:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	searchPrompt:SetPoint("LEFT", searchBox, "LEFT", 13, 0)
+	searchPrompt:SetText("Search recipes or materials...")
+	f.searchPrompt = searchPrompt
+	GG:SetSearchPrompt()
+
 	for _, c in ipairs(COLS) do
 		local b = CreateFrame("Button", nil, f)
 		b:SetPoint("TOPLEFT", f, "TOPLEFT", 30 + c.x, -60)
@@ -804,8 +884,7 @@ function GG:CreateWindow()
 			else
 				GG.sortKey, GG.sortDesc = c.key, (c.key ~= "name" and c.key ~= "prof")
 			end
-			SortResults()
-			GG:UpdateList()
+			GG:RefreshList()
 		end)
 	end
 
@@ -879,9 +958,10 @@ end
 function GG:UpdateList()
 	local f = self.frame
 	if not f then return end
-	local view = self.results or {}
+	local view = self.view or {}
 	FauxScrollFrame_Update(f.scroll, #view, ROWS, ROW_H)
 	local off = FauxScrollFrame_GetOffset(f.scroll)
+	if off > 0 then off = min(off, math.max(0, #view - ROWS)) end
 
 	for i = 1, ROWS do
 		local row, res = f.rows[i], view[off + i]
@@ -908,13 +988,28 @@ function GG:UpdateList()
 		end
 	end
 
-	if #view == 0 then f.empty:Show() else f.empty:Hide() end
+	if #view == 0 then
+		if (self.search or "") ~= "" and #(self.results or {}) > 0 then
+			f.empty:SetText("No recipes match your search.")
+		else
+			f.empty:SetText("No recipes yet.\nOpen each of your profession windows once so Greedy Goblin can learn them.")
+		end
+		f.empty:Show()
+	else
+		f.empty:Hide()
+	end
 end
 
 function GG:UpdateStatus()
 	local f = self.frame
 	if not f then return end
 	local txt
+	local count
+	if (self.search or "") ~= "" and self.view then
+		count = format("%d of %d recipes shown", #self.view, #(self.results or {}))
+	else
+		count = format("%d recipes", #(self.results or {}))
+	end
 	if scan then
 		if scan.mode == "unknown" then
 			txt = format("|cffffd700Looking up prices:|r %d/%d  %s", scan.i, #scan.queue, scan.cur and scan.cur.name or "")
@@ -924,11 +1019,11 @@ function GG:UpdateStatus()
 			txt = "|cffffd700Scanning:|r waiting for the auction house..."
 		end
 	elseif AuctionatorMode() then
-		txt = format("Prices: |cffffd700Auctionator|r  |  AH cut %d%%  |  %d recipes", db.cut, #(self.results or {}))
+		txt = format("Prices: |cffffd700Auctionator|r  |  AH cut %d%%  |  %s", db.cut, count)
 	else
 		local d = AHData()
 		local ah = d and format("%d items scanned %s ago", d.n, Age(time() - d.t)) or "|cffff4040no AH scan yet|r"
-		txt = format("AH: %s  |  AH cut %d%%  |  %d recipes", ah, db.cut, #(self.results or {}))
+		txt = format("AH: %s  |  AH cut %d%%  |  %s", ah, db.cut, count)
 		if self.ahOpen then
 			local _, canAll = CanSendAuctionQuery()
 			if not canAll then txt = txt .. "  |  |cffff8040full scan on cooldown|r" end

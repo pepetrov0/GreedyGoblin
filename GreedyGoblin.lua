@@ -814,7 +814,7 @@ function GG:CreateWindow()
 	if self.frame then return end
 	local f = CreateFrame("Frame", "GreedyGoblinFrame", UIParent)
 	f:SetWidth(880)
-	f:SetHeight(660)
+	f:SetHeight(672)
 	f:SetPoint("CENTER")
 	f:SetFrameStrata("HIGH")
 	f:SetToplevel(true)
@@ -844,9 +844,13 @@ function GG:CreateWindow()
 	close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -8, -8)
 	f.close = close
 
+	local searchLabel = f:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+	searchLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -46)
+	searchLabel:SetText("Search:")
+
 	local searchBox = CreateFrame("EditBox", "GreedyGoblinSearch", f, "InputBoxTemplate")
-	searchBox:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -40)
-	searchBox:SetWidth(790)
+	searchBox:SetPoint("TOPLEFT", f, "TOPLEFT", 86, -40)
+	searchBox:SetPoint("TOPRIGHT", f, "TOPRIGHT", -60, 0)
 	searchBox:SetHeight(24)
 	searchBox:SetAutoFocus(false)
 	searchBox:SetMaxLetters(48)
@@ -871,7 +875,7 @@ function GG:CreateWindow()
 
 	for _, c in ipairs(COLS) do
 		local b = CreateFrame("Button", nil, f)
-		b:SetPoint("TOPLEFT", f, "TOPLEFT", 30 + c.x, -68)
+		b:SetPoint("TOPLEFT", f, "TOPLEFT", 30 + c.x, -80)
 		b:SetWidth(c.w)
 		b:SetHeight(20)
 		b:SetNormalFontObject(GameFontNormal)
@@ -889,7 +893,7 @@ function GG:CreateWindow()
 	end
 
 	local sf = CreateFrame("ScrollFrame", "GreedyGoblinScroll", f, "FauxScrollFrameTemplate")
-	sf:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -94)
+	sf:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -106)
 	sf:SetWidth(790)
 	sf:SetHeight(ROWS * ROW_H)
 	sf:SetScript("OnVerticalScroll", function(self, offset)
@@ -907,7 +911,7 @@ function GG:CreateWindow()
 		local row = CreateFrame("Button", nil, f)
 		row:SetWidth(790)
 		row:SetHeight(ROW_H)
-		row:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -94 - (i - 1) * ROW_H)
+		row:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -106 - (i - 1) * ROW_H)
 		row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
 		row.cols = {}
 		for _, c in ipairs(COLS) do row.cols[c.key] = MakeText(row, c) end

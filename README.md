@@ -61,7 +61,7 @@ Type `/gg` to open the window. The list shows one row per known recipe:
 | Recipe | Recipe name, with the average yield shown for multi-craft recipes (`x3`) |
 | Profession | The profession the recipe belongs to |
 | Materials | Cheapest possible cost of the reagents |
-| Sells for | Price after the AH cut (`v` marks a vendor fallback price, `a` a price from Auctionator) |
+| Sells for | Price after the AH cut (`v` marks a vendor fallback price) |
 | Profit | Sell price minus material cost |
 | Margin | Profit as a percentage of the sell price |
 

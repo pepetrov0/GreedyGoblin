@@ -837,7 +837,7 @@ function GG:CreateWindow()
 	f.measure:SetAlpha(0)
 
 	local title = f:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-	title:SetPoint("TOP", f, "TOP", 0, -24)
+	title:SetPoint("TOP", f, "TOP", 0, -16)
 	title:SetText("Greedy Goblin")
 
 	local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
@@ -845,8 +845,8 @@ function GG:CreateWindow()
 	f.close = close
 
 	local searchBox = CreateFrame("EditBox", "GreedyGoblinSearch", f, "InputBoxTemplate")
-	searchBox:SetPoint("TOPLEFT", f, "TOPLEFT", 34, -32)
-	searchBox:SetWidth(260)
+	searchBox:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -40)
+	searchBox:SetWidth(790)
 	searchBox:SetHeight(24)
 	searchBox:SetAutoFocus(false)
 	searchBox:SetMaxLetters(48)
@@ -871,7 +871,7 @@ function GG:CreateWindow()
 
 	for _, c in ipairs(COLS) do
 		local b = CreateFrame("Button", nil, f)
-		b:SetPoint("TOPLEFT", f, "TOPLEFT", 30 + c.x, -60)
+		b:SetPoint("TOPLEFT", f, "TOPLEFT", 30 + c.x, -68)
 		b:SetWidth(c.w)
 		b:SetHeight(20)
 		b:SetNormalFontObject(GameFontNormal)
@@ -889,7 +889,7 @@ function GG:CreateWindow()
 	end
 
 	local sf = CreateFrame("ScrollFrame", "GreedyGoblinScroll", f, "FauxScrollFrameTemplate")
-	sf:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -86)
+	sf:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -94)
 	sf:SetWidth(790)
 	sf:SetHeight(ROWS * ROW_H)
 	sf:SetScript("OnVerticalScroll", function(self, offset)
@@ -907,7 +907,7 @@ function GG:CreateWindow()
 		local row = CreateFrame("Button", nil, f)
 		row:SetWidth(790)
 		row:SetHeight(ROW_H)
-		row:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -86 - (i - 1) * ROW_H)
+		row:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -94 - (i - 1) * ROW_H)
 		row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
 		row.cols = {}
 		for _, c in ipairs(COLS) do row.cols[c.key] = MakeText(row, c) end
@@ -972,10 +972,7 @@ function GG:UpdateList()
 			c.name:SetText(Fit(f, res.name, suffix, COL_W.name))
 			c.prof:SetText(Fit(f, res.prof, "", COL_W.prof))
 			c.cost:SetText(Money(res.cost))
-			local tag
-			if res.vendorSell then tag = " |cff888888v|r"
-			elseif res.auc then tag = " |cff888888a|r" end
-			c.sell:SetText(Money(res.sell) .. (tag or ""))
+			c.sell:SetText(Money(res.sell) .. (res.vendorSell and " |cff888888v|r" or ""))
 			c.profit:SetText(Money(res.profit))
 			if res.margin then
 				c.margin:SetText((res.margin >= 0 and "|cff55ff55" or "|cffff4040") .. floor(res.margin + 0.5) .. "%|r")

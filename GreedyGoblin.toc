@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: |cffffd700Greedy Goblin|r
+## Notes: Simple crafting profit list. Scans the whole AH itself, shows materials cost, sell price and profit for every recipe you know.
+## Author: You
+## Version: 1.0
+## SavedVariables: GreedyGoblinDB
+
+GreedyGoblin.lua

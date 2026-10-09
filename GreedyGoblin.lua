@@ -2,7 +2,7 @@
 -- Greedy Goblin 2.0 - standalone crafting profit list (WotLK 3.3.5)
 -- * learns your recipes from the profession windows
 -- * scans the whole auction house itself
--- * Auctionator support: when loaded, its prices take over (opt out: /gg auctionator off)
+-- * Auctionator support: on at first install when detected (/gg auctionator on|off)
 -- * one window, one tooltip (cost / sell price / profit), no other hooks
 ------------------------------------------------------------------------
 local GG = {}
@@ -96,9 +96,10 @@ local function AuctionatorPrice(id, name)
 end
 
 ------------------------------------------------------------------------
--- Auctionator mode: whenever Auctionator is loaded (unless the user opts
--- out with /gg auctionator off), its database is the sole source of
--- market prices and the own AH scan machinery is switched off.
+-- Auctionator mode: decided once at first install (Auctionator detected
+-- or not), stored in db.auctMode and switchable with /gg auctionator
+-- on|off. While on, Auctionator is the sole source of market prices and
+-- the own AH scan machinery is switched off.
 ------------------------------------------------------------------------
 local function AuctionatorPresent()
 	return Atr_GetAuctionBuyout ~= nil or Atr_GetAuctionPrice ~= nil
@@ -1073,12 +1074,25 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		db.ah      = db.ah or {}       -- [realm] = { t = time, n = items, p = { [itemID] = lowest unit buyout } }
 		db.recipes = db.recipes or {}  -- [realm-char] = { [profession] = { recipe, ... } }
 		Print("loaded. /gg to open, /gg scan at the auction house.")
-		if AuctionatorPresent() then
+		if db.auctMode == nil then
+			-- first install: pick the price source once and tell the player
+			if AuctionatorPresent() then
+				db.auctMode = true
+				local had = ClearAHData()
+				Print("Auctionator found: prices come from Auctionator"
+					.. (had and ", own AH data cleared." or ".")
+					.. " /gg auctionator off to scan yourself instead.")
+			else
+				db.auctMode = false
+				Print("No Auctionator found: prices come from your own AH scans (/gg scan and /gg unknown)."
+					.. " Switch with /gg auctionator on once it is installed.")
+			end
+		elseif AuctionatorPresent() then
 			if AuctionatorMode() then
 				local had = ClearAHData()
-				Print("Auctionator mode: prices come from Auctionator"
-					.. (had and ", own AH data cleared." or ".")
-					.. " /gg auctionator off to disable.")
+				if had then
+					Print("Auctionator mode: own AH data cleared. /gg auctionator off to disable.")
+				end
 			else
 				Print("Auctionator present but disabled: /gg auctionator on to use its prices.")
 			end

@@ -2,7 +2,7 @@
 -- Greedy Goblin 2.0 - standalone crafting profit list (WotLK 3.3.5)
 -- * learns your recipes from the profession windows
 -- * scans the whole auction house itself
--- * optional Auctionator support: its saved prices are used as a source too
+-- * Auctionator support: when loaded, its prices take over (opt out: /gg auctionator off)
 -- * one window, one tooltip (cost / sell price / profit), no other hooks
 ------------------------------------------------------------------------
 local GG = {}
@@ -14,6 +14,13 @@ local db
 local PER_PAGE  = NUM_AUCTION_ITEMS_PER_PAGE or 50
 local CHUNK     = 500     -- auctions processed per frame after a get-all scan
 local DB_VERSION = 2
+
+-- every WotLK enchanting vellum, so the vellum price can come straight from
+-- Auctionator when there are no own AH scans that have spotted them
+local VELLUM_NAMES = {
+	"Weapon Vellum", "Weapon Vellum II", "Weapon Vellum III",
+	"Armor Vellum", "Armor Vellum II", "Armor Vellum III",
+}
 
 ------------------------------------------------------------------------
 -- Helpers
@@ -63,9 +70,9 @@ local function AHPrice(id)
 end
 
 ------------------------------------------------------------------------
--- Auctionator (optional): when it is loaded, its price database is used
--- as an extra source. Both the current API (Auctionator.API.v1) and the
--- legacy Atr_ functions are probed, so any Auctionator flavour works.
+-- Auctionator (optional): its price database, probed through either the
+-- current API (Auctionator.API.v1) or the legacy Atr_ functions, so any
+-- Auctionator flavour works.
 ------------------------------------------------------------------------
 local function AuctionatorPrice(id, name)
 	if not id and not name then return nil end
@@ -86,6 +93,26 @@ local function AuctionatorPrice(id, name)
 	end
 
 	return nil
+end
+
+------------------------------------------------------------------------
+-- Auctionator mode: whenever Auctionator is loaded (unless the user opts
+-- out with /gg auctionator off), its database is the sole source of
+-- market prices and the own AH scan machinery is switched off.
+------------------------------------------------------------------------
+local function AuctionatorPresent()
+	return Atr_GetAuctionBuyout ~= nil or Atr_GetAuctionPrice ~= nil
+		or (Auctionator ~= nil and Auctionator.API ~= nil and Auctionator.API.v1 ~= nil)
+end
+
+local function AuctionatorMode()
+	return db.auctMode ~= false and AuctionatorPresent()
+end
+
+local function ClearAHData()
+	local had = (next(db.ah) or next(db.scrolls) or next(db.vellums)) ~= nil
+	db.ah, db.scrolls, db.vellums = {}, {}, {}
+	return had
 end
 
 ------------------------------------------------------------------------
@@ -165,9 +192,16 @@ local vellumPrice -- most expensive vellum on the AH (nil if none seen)
 
 local function BuildIndex()
 	byProduct, memo, vellumPrice = {}, {}, nil
-	for id in pairs(db.vellums) do
-		local p = AHPrice(id) or AuctionatorPrice(id)
-		if p and (not vellumPrice or p > vellumPrice) then vellumPrice = p end
+	if AuctionatorMode() then
+		for _, nm in ipairs(VELLUM_NAMES) do
+			local p = AuctionatorPrice(nil, nm)
+			if p and (not vellumPrice or p > vellumPrice) then vellumPrice = p end
+		end
+	else
+		for id in pairs(db.vellums) do
+			local p = AHPrice(id) or AuctionatorPrice(id)
+			if p and (not vellumPrice or p > vellumPrice) then vellumPrice = p end
+		end
 	end
 	for _, list in pairs(db.recipes[CharKey()] or {}) do
 		for _, r in ipairs(list) do
@@ -455,6 +489,10 @@ local function UnknownTick(now)
 end
 
 function GG:StartUnknownScan()
+	if AuctionatorMode() then
+		Print("Not needed: Auctionator already provides the prices. /gg auctionator off to re-enable.")
+		return
+	end
 	if not self.ahOpen then Print("Open the auction house first.") return end
 	if scan then Print("A scan is already running.") return end
 	self:Compute()
@@ -488,6 +526,10 @@ function GG:ClearDatabase()
 end
 
 function GG:StartScan()
+	if AuctionatorMode() then
+		Print("Scanning is off: prices come from Auctionator now. /gg auctionator off to re-enable.")
+		return
+	end
 	if not self.ahOpen then Print("Open the auction house first.") return end
 	if scan then Print("A scan is already running.") return end
 	local _, canAll = CanSendAuctionQuery()
@@ -880,6 +922,8 @@ function GG:UpdateStatus()
 		else
 			txt = "|cffffd700Scanning:|r waiting for the auction house..."
 		end
+	elseif AuctionatorMode() then
+		txt = format("Prices: |cffffd700Auctionator|r  |  AH cut %d%%  |  %d recipes", db.cut, #(self.results or {}))
 	else
 		local d = AHData()
 		local ah = d and format("%d items scanned %s ago", d.n, Age(time() - d.t)) or "|cffff4040no AH scan yet|r"
@@ -893,19 +937,27 @@ function GG:UpdateStatus()
 end
 
 function GG:UpdateButtons()
+	local f = self.frame
+	if not f then return end
+	if AuctionatorMode() then
+		if f.scanBtn then f.scanBtn:Hide() end
+		if f.unknownBtn then f.unknownBtn:Hide() end
+		return
+	end
+	if f.scanBtn then f.scanBtn:Show() end
+	if f.unknownBtn then f.unknownBtn:Show() end
 	local canAll, canQuery = false, false
 	if self.ahOpen and not scan then
 		local q, a = CanSendAuctionQuery()
 		canQuery, canAll = q and true or false, a and true or false
 	end
-	local f = self.frame
 	local function set(b, on)
 		if b then
 			if on then b:Enable() else b:Disable() end
 		end
 	end
-	set(f and f.scanBtn, canAll)
-	set(f and f.unknownBtn, canQuery)
+	set(f.scanBtn, canAll)
+	set(f.unknownBtn, canQuery)
 end
 
 function GG:Toggle()
@@ -936,6 +988,25 @@ SlashCmdList["GREEDYGOBLIN"] = function(msg)
 		StaticPopup_Show("GREEDYGOBLIN_CLEAR")
 	elseif cmd == "unknown" then
 		GG:StartUnknownScan()
+	elseif cmd == "auctionator" then
+		if rest == "on" or rest == "off" then
+			db.auctMode = (rest == "on")
+			if rest == "on" then
+				if AuctionatorPresent() then
+					local had = ClearAHData()
+					Print("Auctionator mode on: prices come from Auctionator" .. (had and ", own AH data cleared." or "."))
+				else
+					Print("Auctionator mode on, but Auctionator is not loaded.")
+				end
+			else
+				Print("Auctionator mode off: prices come from /gg scan and /gg unknown again.")
+			end
+			GG:Compute()
+			GG:UpdateButtons()
+			if GG.frame and GG.frame:IsShown() then GG:UpdateStatus() end
+		else
+			Print("Auctionator mode is " .. (AuctionatorMode() and "on" or "off") .. ". Usage: /gg auctionator on|off")
+		end
 	elseif cmd == "cut" then
 		local n = tonumber(rest)
 		if not n or n < 0 or n > 50 then Print("Usage: /gg cut <percent>   (5 faction AH, 15 neutral AH)") return end
@@ -947,7 +1018,7 @@ SlashCmdList["GREEDYGOBLIN"] = function(msg)
 		GG:Compute()
 		Print("Forgot the recipes stored for this character.")
 	else
-		Print("/gg  |  /gg scan  |  /gg unknown  |  /gg cut <percent>  |  /gg reset  |  /gg clear")
+		Print("/gg  |  /gg scan  |  /gg unknown  |  /gg auctionator on|off  |  /gg cut <percent>  |  /gg reset  |  /gg clear")
 	end
 end
 
@@ -1002,8 +1073,15 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		db.ah      = db.ah or {}       -- [realm] = { t = time, n = items, p = { [itemID] = lowest unit buyout } }
 		db.recipes = db.recipes or {}  -- [realm-char] = { [profession] = { recipe, ... } }
 		Print("loaded. /gg to open, /gg scan at the auction house.")
-		if Atr_GetAuctionBuyout or Atr_GetAuctionPrice or (Auctionator and Auctionator.API) then
-			Print("Auctionator detected: its prices are used as an extra source.")
+		if AuctionatorPresent() then
+			if AuctionatorMode() then
+				local had = ClearAHData()
+				Print("Auctionator mode: prices come from Auctionator"
+					.. (had and ", own AH data cleared." or ".")
+					.. " /gg auctionator off to disable.")
+			else
+				Print("Auctionator present but disabled: /gg auctionator on to use its prices.")
+			end
 		end
 
 	elseif not db then

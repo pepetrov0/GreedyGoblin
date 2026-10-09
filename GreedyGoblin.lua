@@ -845,11 +845,11 @@ function GG:CreateWindow()
 	f.close = close
 
 	local searchLabel = f:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-	searchLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -46)
+	searchLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -52)
 	searchLabel:SetText("Search:")
 
 	local searchBox = CreateFrame("EditBox", "GreedyGoblinSearch", f, "InputBoxTemplate")
-	searchBox:SetPoint("TOPLEFT", f, "TOPLEFT", 86, -40)
+	searchBox:SetPoint("TOPLEFT", f, "TOPLEFT", 86, -46)
 	searchBox:SetPoint("TOPRIGHT", f, "TOPRIGHT", -60, 0)
 	searchBox:SetHeight(24)
 	searchBox:SetAutoFocus(false)
@@ -875,7 +875,7 @@ function GG:CreateWindow()
 
 	for _, c in ipairs(COLS) do
 		local b = CreateFrame("Button", nil, f)
-		b:SetPoint("TOPLEFT", f, "TOPLEFT", 30 + c.x, -80)
+		b:SetPoint("TOPLEFT", f, "TOPLEFT", 30 + c.x, -76)
 		b:SetWidth(c.w)
 		b:SetHeight(20)
 		b:SetNormalFontObject(GameFontNormal)
@@ -893,7 +893,7 @@ function GG:CreateWindow()
 	end
 
 	local sf = CreateFrame("ScrollFrame", "GreedyGoblinScroll", f, "FauxScrollFrameTemplate")
-	sf:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -106)
+	sf:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -102)
 	sf:SetWidth(790)
 	sf:SetHeight(ROWS * ROW_H)
 	sf:SetScript("OnVerticalScroll", function(self, offset)
@@ -911,7 +911,7 @@ function GG:CreateWindow()
 		local row = CreateFrame("Button", nil, f)
 		row:SetWidth(790)
 		row:SetHeight(ROW_H)
-		row:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -106 - (i - 1) * ROW_H)
+		row:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -102 - (i - 1) * ROW_H)
 		row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
 		row.cols = {}
 		for _, c in ipairs(COLS) do row.cols[c.key] = MakeText(row, c) end
@@ -1040,11 +1040,21 @@ function GG:UpdateButtons()
 		if f.scanBtn then f.scanBtn:Hide() end
 		if f.unknownBtn then f.unknownBtn:Hide() end
 		if f.clearBtn then f.clearBtn:Hide() end
+		if f.status then
+			f.status:ClearAllPoints()
+			f.status:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 32, 26)
+		end
+		f:SetHeight(632) -- no button row: pull the foot in
 		return
 	end
 	if f.scanBtn then f.scanBtn:Show() end
 	if f.unknownBtn then f.unknownBtn:Show() end
 	if f.clearBtn then f.clearBtn:Show() end
+	if f.status then
+		f.status:ClearAllPoints()
+		f.status:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 32, 66)
+	end
+	f:SetHeight(672)
 	local canAll, canQuery = false, false
 	if self.ahOpen and not scan then
 		local q, a = CanSendAuctionQuery()

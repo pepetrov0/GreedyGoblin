@@ -86,7 +86,7 @@ The **Scan AH** and **Find Unknown Prices** buttons are hidden while [Auctionato
 On first install, GreedyGoblin checks whether Auctionator is loaded, stores the decision, and informs you in the chat window which price source is active. From then on the stored choice is used (toggle it anytime with `/gg auctionator on|off`). While the mode is on:
 
 - every market price — materials, crafted products, enchant scrolls and the enchanting vellum — comes from Auctionator's database
-- no **Scan AH** / **Find Unknown Prices** buttons — the whole own-scan machinery is off
+- no **Scan AH**, **Find Unknown Prices** or **Clear Database** buttons — the whole own-scan machinery is off
 - all previously scanned AH data (prices, scroll and vellum registries) is cleared automatically
 
 > [!NOTE]

@@ -19,6 +19,7 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 - 🔌 **Auctionator mode** — when Auctionator is present at first install, its price database becomes the sole source of market prices: no own scanning, no AH data kept, scan buttons hidden. A chat message tells you which source is active, and the choice can be toggled anytime with `/gg auctionator on|off`
 - 🏷️ **Smart material costing** — every material is priced at the cheapest of vendor, auction house, or crafting it yourself (resolved recursively up to 4 levels deep)
 - 💰 **Profit at a glance** — sortable list with materials cost, sell price after the AH cut, profit and margin; hover a row for the full cost breakdown
+- 🔎 **Search bar** — a filter at the top of the window matches recipe names, or the name of any material the recipe uses (including crafting chains and the enchanting vellum)
 - 📜 **Enchanting support** — scrolls and vellums are detected on the AH, so enchanting recipes are costed and valued correctly
 - 🎯 **Missing price lookups** — a *Find Unknown Prices* action performs targeted AH searches for anything you haven't priced yet
 - 🎨 **ElvUI skin** — the window is automatically skinned when [ElvUI](https://github.com/tukui-org/ElvUI) is enabled, plain Blizzard UI otherwise
@@ -65,6 +66,10 @@ Type `/gg` to open the window. The list shows one row per known recipe:
 | Margin | Profit as a percentage of the sell price |
 
 Click any column header to sort by it (click again to reverse). Rows with unknown prices always sort last. The status bar at the bottom shows how many items were scanned, how old the scan is, the AH cut, and the number of recipes.
+
+### Search bar
+
+A filter box at the top of the window matches recipes against the **recipe name** and the names of **every material shown in the row tooltip** — including the cheaper crafting sources of those materials, and the enchanting vellum (searching `vellum` lists all enchanting recipes). Matching is case-insensitive; while a filter is active, the status bar shows *N of M recipes shown*. Escape clears the text (a second press releases focus), and column sorting applies to the filtered list.
 
 ### Scanning the auction house
 

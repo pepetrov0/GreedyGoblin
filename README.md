@@ -16,6 +16,7 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 
 - 🏭 **Automatic recipe learning** — open each of your profession windows once and every recipe is remembered, including reagents and average craft yield
 - 🔍 **Self-contained AH scanner** — performs its own get-all scan of the auction house and stores the lowest buyout for every item seen, per realm
+- 🔌 **Auctionator integration** — when [Auctionator](https://github.com/TheMouseNest/Auctionator) is loaded, its saved prices are used as an extra source for anything GreedyGoblin hasn't priced itself
 - 🏷️ **Smart material costing** — every material is priced at the cheapest of vendor, auction house, or crafting it yourself (resolved recursively up to 4 levels deep)
 - 💰 **Profit at a glance** — sortable list with materials cost, sell price after the AH cut, profit and margin; hover a row for the full cost breakdown
 - 📜 **Enchanting support** — scrolls and vellums are detected on the AH, so enchanting recipes are costed and valued correctly
@@ -26,7 +27,7 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 ## Requirements
 
 - World of Warcraft: Wrath of the Lich King, client **3.3.5**
-- No libraries or other addons needed. ElvUI is optional (skinning only).
+- No libraries or other addons required. [Auctionator](https://github.com/TheMouseNest/Auctionator) is used for prices when loaded, [ElvUI](https://github.com/tukui-org/ElvUI) only for skinning.
 
 ## Installation
 
@@ -56,7 +57,7 @@ Type `/gg` to open the window. The list shows one row per known recipe:
 | Recipe | Recipe name, with the average yield shown for multi-craft recipes (`x3`) |
 | Profession | The profession the recipe belongs to |
 | Materials | Cheapest possible cost of the reagents |
-| Sells for | Current AH price after the AH cut (`v` marks a vendor fallback price) |
+| Sells for | Price after the AH cut (`v` marks a vendor fallback price, `a` a price from Auctionator) |
 | Profit | Sell price minus material cost |
 | Margin | Profit as a percentage of the sell price |
 
@@ -68,14 +69,14 @@ Click any column header to sort by it (click again to reverse). Rows with unknow
 
 ### Find Unknown Prices
 
-**Find Unknown Prices** collects everything without a usable price — materials at any crafting depth, crafted products, enchant scrolls and vellums — then performs a targeted AH search for each of them (up to 3 pages per search). Items checked in the last 10 minutes are skipped within the same session to avoid spamming queries.
+**Find Unknown Prices** collects everything without a usable price — materials at any crafting depth, crafted products, enchant scrolls and vellums — then performs a targeted AH search for each of them (up to 3 pages per search). Items checked in the last 10 minutes are skipped within the same session to avoid spamming queries, and items already priced by Auctionator count as known.
 
 > [!NOTE]
 > If the auction house is closed or doesn't answer, scans abort gracefully and tell you what happened.
 
 ### Row tooltip
 
-Hovering a recipe row opens a tooltip with the complete breakdown: every material with its quantity, its cheapest source (vendor & NPC name, AH, or `craft: Profession` for materials you can make yourself), the vellum cost for enchants, the AH cut and the final profit.
+Hovering a recipe row opens a tooltip with the complete breakdown: every material with its quantity, its cheapest source (vendor & NPC name, AH, auctionator, or `craft: Profession` for materials you can make yourself), the vellum cost for enchants, the AH cut and the final profit.
 
 > [!IMPORTANT]
 > Enchanting recipes have no crafted product: the addon prices scrolls of the enchant found on the AH and includes the priciest vellum it has seen on sale in the material cost.
@@ -95,9 +96,9 @@ Hovering a recipe row opens a tooltip with the complete breakdown: every materia
 
 For each recipe the addon computes the cheapest realistic way to obtain every reagent:
 
-1. Each material is priced at the **cheapest** of three sources: a vendor you've met, the auction house, or crafting it with a recipe you know.
+1. Each material is priced at the **cheapest** of four sources: a vendor you've met, your own AH scan, [Auctionator](https://github.com/TheMouseNest/Auctionator) (when loaded), or crafting it with a recipe you know.
 2. Crafted material costs are resolved **recursively**, up to 4 levels deep, with cycle protection — so e.g. *Saronite Ore → Smelted Bar → Crafted Item* chains are all explored and the best option wins.
-3. The material cost is the sum of the reagent costs. The sell price is the lowest AH buyout of the product (times the average craft yield), minus the AH cut.
+3. The material cost is the sum of the reagent costs. The sell price is the lowest AH buyout of the product (times the average craft yield), minus the AH cut — with Auctionator's price and the vendor sell price as fallbacks when the AH price is unknown.
 4. **Profit = sell price − material cost**, and the margin is the profit relative to the sell price.
 
 Vendor prices are picked up automatically whenever you browse a merchant that sells materials you use.
@@ -111,5 +112,8 @@ Everything is kept in the `GreedyGoblinDB` saved variable:
 - **Vendor prices** — per item, along with the name of the vendor it was seen at
 - **Scrolls & vellums** — item IDs catalogued from AH scans, used for enchanting
 - **AH cut** — your configured auction house cut (default 5%)
+
+> [!NOTE]
+> Auctionator prices are read live from Auctionator's own database and are never stored in `GreedyGoblinDB`.
 
 Use the **Clear Database** button or `/gg clear` to delete everything, then open your profession windows again to re-learn recipes.

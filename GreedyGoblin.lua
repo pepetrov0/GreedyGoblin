@@ -2,6 +2,7 @@
 -- Greedy Goblin 2.0 - standalone crafting profit list (WotLK 3.3.5)
 -- * learns your recipes from the profession windows
 -- * scans the whole auction house itself
+-- * optional Auctionator support: its saved prices are used as a source too
 -- * one window, one tooltip (cost / sell price / profit), no other hooks
 ------------------------------------------------------------------------
 local GG = {}
@@ -59,6 +60,32 @@ local function AHData() return db.ah[GetRealmName()] end
 local function AHPrice(id)
 	local d = AHData()
 	return d and d.p[id]
+end
+
+------------------------------------------------------------------------
+-- Auctionator (optional): when it is loaded, its price database is used
+-- as an extra source. Both the current API (Auctionator.API.v1) and the
+-- legacy Atr_ functions are probed, so any Auctionator flavour works.
+------------------------------------------------------------------------
+local function AuctionatorPrice(id, name)
+	if not id and not name then return nil end
+
+	local api = Auctionator and Auctionator.API and Auctionator.API.v1
+	if api and api.GetAuctionPriceByItemID then
+		local ok, p = pcall(api.GetAuctionPriceByItemID, "GreedyGoblin", id)
+		if ok and type(p) == "number" and p > 0 then return p end
+	end
+
+	local legacy = Atr_GetAuctionBuyout or Atr_GetAuctionPrice
+	if type(legacy) == "function" then
+		local ok, p = pcall(legacy, name or id)
+		if (not ok or p == nil) and id then
+			ok, p = pcall(legacy, id)
+		end
+		if ok and type(p) == "number" and p > 0 then return p end
+	end
+
+	return nil
 end
 
 ------------------------------------------------------------------------
@@ -139,7 +166,7 @@ local vellumPrice -- most expensive vellum on the AH (nil if none seen)
 local function BuildIndex()
 	byProduct, memo, vellumPrice = {}, {}, nil
 	for id in pairs(db.vellums) do
-		local p = AHPrice(id)
+		local p = AHPrice(id) or AuctionatorPrice(id)
 		if p and (not vellumPrice or p > vellumPrice) then vellumPrice = p end
 	end
 	for _, list in pairs(db.recipes[CharKey()] or {}) do
@@ -163,6 +190,11 @@ local function Node(id, name, visiting, depth)
 	local ah = AHPrice(id)
 	if ah and (not node.cost or ah < node.cost) then
 		node.cost, node.src, node.npc = ah, "AH", nil
+	end
+
+	local ap = AuctionatorPrice(id, name)
+	if ap and (not node.cost or ap < node.cost) then
+		node.cost, node.src, node.npc = ap, "auctionator", nil
 	end
 
 	local recs = byProduct[id]
@@ -214,12 +246,25 @@ local function Evaluate(r)
 			p = id and AHPrice(id)
 			if p then break end
 		end
+		if not p then
+			for _, nm in ipairs({ "Scroll of " .. r.name, r.name }) do
+				p = AuctionatorPrice(nil, nm)
+				if p then
+					res.auc = true
+					break
+				end
+			end
+		end
 		if p then
 			res.gross, res.scroll = p, true
 			res.sell = p * (1 - db.cut / 100)
 		end
 	elseif r.product then
 		local p = AHPrice(r.product)
+		if not p then
+			p = AuctionatorPrice(r.product)
+			if p then res.auc = true end
+		end
 		if p then
 			res.gross = p * r.made
 			res.sell = res.gross * (1 - db.cut / 100)
@@ -332,7 +377,7 @@ local function CollectUnknown()
 	for _, res in ipairs(GG.results or {}) do
 		local r = res.r
 		if r.product then
-			if not AHPrice(r.product) then
+			if not AHPrice(r.product) and not AuctionatorPrice(r.product) then
 				add(r.product, { id = r.product, name = GetItemInfo(r.product) or r.name })
 			end
 		else
@@ -580,13 +625,15 @@ local COLS = {
 local COL_W = {}
 for _, c in ipairs(COLS) do COL_W[c.key] = c.w - 6 end
 
-local SRC_COLOR = { vendor = "|cff55ff55", AH = "|cffffd100", craft = "|cff55ccff" }
+local SRC_COLOR = { vendor = "|cff55ff55", AH = "|cffffd100", craft = "|cff55ccff", auctionator = "|cff40d0b0" }
 
 local function SrcLabel(node)
 	if node.src == "vendor" then
 		return "vendor" .. (node.npc and (": " .. node.npc) or "")
 	elseif node.src == "craft" then
 		return "craft: " .. node.rec.prof
+	elseif node.src == "auctionator" then
+		return "auctionator"
 	end
 	return "AH"
 end
@@ -619,10 +666,13 @@ local function ShowRowTooltip(row, res)
 	tt:AddLine(" ")
 	tt:AddDoubleLine("Materials cost", Money(res.cost), 1, 1, 1, 1, 1, 1)
 	if res.gross then
-		if res.vendorSell then
-			tt:AddDoubleLine("Sell price (vendor)", Money(res.sell), 1, 1, 1, 1, 1, 1)
-		else
-			tt:AddDoubleLine(res.scroll and "Sell price (scroll, AH)" or "Sell price (AH)", Money(res.gross), 1, 1, 1, 1, 1, 1)
+		local label
+		if res.vendorSell then label = "Sell price (vendor)"
+		elseif res.scroll then label = res.auc and "Sell price (scroll, auctionator)" or "Sell price (scroll, AH)"
+		elseif res.auc then label = "Sell price (auctionator)"
+		else label = "Sell price (AH)" end
+		tt:AddDoubleLine(label, Money(res.gross), 1, 1, 1, 1, 1, 1)
+		if not res.vendorSell then
 			tt:AddDoubleLine("AH cut (" .. db.cut .. "%)", Money(-(res.gross - res.sell)), 1, 1, 1, 1, 1, 1)
 		end
 	else
@@ -799,7 +849,10 @@ function GG:UpdateList()
 			c.name:SetText(Fit(f, res.name, suffix, COL_W.name))
 			c.prof:SetText(Fit(f, res.prof, "", COL_W.prof))
 			c.cost:SetText(Money(res.cost))
-			c.sell:SetText(Money(res.sell) .. (res.vendorSell and " |cff888888v|r" or ""))
+			local tag
+			if res.vendorSell then tag = " |cff888888v|r"
+			elseif res.auc then tag = " |cff888888a|r" end
+			c.sell:SetText(Money(res.sell) .. (tag or ""))
 			c.profit:SetText(Money(res.profit))
 			if res.margin then
 				c.margin:SetText((res.margin >= 0 and "|cff55ff55" or "|cffff4040") .. floor(res.margin + 0.5) .. "%|r")
@@ -949,6 +1002,9 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		db.ah      = db.ah or {}       -- [realm] = { t = time, n = items, p = { [itemID] = lowest unit buyout } }
 		db.recipes = db.recipes or {}  -- [realm-char] = { [profession] = { recipe, ... } }
 		Print("loaded. /gg to open, /gg scan at the auction house.")
+		if Atr_GetAuctionBuyout or Atr_GetAuctionPrice or (Auctionator and Auctionator.API) then
+			Print("Auctionator detected: its prices are used as an extra source.")
+		end
 
 	elseif not db then
 		return

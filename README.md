@@ -16,7 +16,7 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 
 - 🏭 **Automatic recipe learning** — open each of your profession windows once and every recipe is remembered, including reagents and average craft yield
 - 🔍 **Self-contained AH scanner** — performs its own get-all scan of the auction house and stores the lowest buyout for every item seen, per realm
-- 🔌 **Auctionator integration** — when [Auctionator](https://github.com/TheMouseNest/Auctionator) is loaded, its saved prices are used as an extra source for anything GreedyGoblin hasn't priced itself
+- 🔌 **Auctionator mode** — when [Auctionator](https://github.com/TheMouseNest/Auctionator) is loaded, its price database is the sole source of market prices: no own scanning, no AH data kept, scan buttons hidden. Opt out with `/gg auctionator off` to restore the built-in scanner
 - 🏷️ **Smart material costing** — every material is priced at the cheapest of vendor, auction house, or crafting it yourself (resolved recursively up to 4 levels deep)
 - 💰 **Profit at a glance** — sortable list with materials cost, sell price after the AH cut, profit and margin; hover a row for the full cost breakdown
 - 📜 **Enchanting support** — scrolls and vellums are detected on the AH, so enchanting recipes are costed and valued correctly
@@ -27,7 +27,7 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 ## Requirements
 
 - World of Warcraft: Wrath of the Lich King, client **3.3.5**
-- No libraries or other addons required. [Auctionator](https://github.com/TheMouseNest/Auctionator) is used for prices when loaded, [ElvUI](https://github.com/tukui-org/ElvUI) only for skinning.
+- No libraries or other addons required. When [Auctionator](https://github.com/TheMouseNest/Auctionator) is loaded it drives all market prices (see [Auctionator mode](#auctionator-mode)), [ElvUI](https://github.com/tukui-org/ElvUI) only reskins the window.
 
 ## Installation
 
@@ -44,6 +44,9 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 3. **Scan the auction house** — open the AH and click **Scan AH** (or run `/gg scan`) to gather prices for everything on sale.
 4. **Fill in the gaps** — click **Find Unknown Prices** (or `/gg unknown`) to look up items that had no price yet.
 5. Repeat step 3–4 occasionally to keep prices fresh, especially after patch days.
+
+> [!NOTE]
+> With Auctionator installed, steps 3–4 are not needed: GreedyGoblin switches to **Auctionator mode** on its own and takes every market price from Auctionator instead (see [Auctionator mode](#auctionator-mode)).
 
 > [!TIP]
 > The addon assumes the faction AH cut of 5%. If you post on a neutral auction house, set the cut first with `/gg cut 15`.
@@ -65,11 +68,26 @@ Click any column header to sort by it (click again to reverse). Rows with unknow
 
 ### Scanning the auction house
 
+The **Scan AH** and **Find Unknown Prices** buttons are hidden while [Auctionator mode](#auctionator-mode) is active.
+
 **Scan AH** queries the entire auction house at once and stores the lowest buyout per unit for every item found. The result replaces the previous scan data for that realm. Scanning is chunked in the background to keep the game responsive, and it respects Blizzard's full-scan cooldown — the button stays disabled until the AH allows a new scan.
 
 ### Find Unknown Prices
 
 **Find Unknown Prices** collects everything without a usable price — materials at any crafting depth, crafted products, enchant scrolls and vellums — then performs a targeted AH search for each of them (up to 3 pages per search). Items checked in the last 10 minutes are skipped within the same session to avoid spamming queries, and items already priced by Auctionator count as known.
+
+### Auctionator mode
+
+When Auctionator is loaded, GreedyGoblin enables **Auctionator mode** automatically:
+
+- no **Scan AH** / **Find Unknown Prices** buttons — the whole own-scan machinery is off
+- all previously scanned AH data (prices, scroll and vellum registries) is cleared automatically
+- every market price — materials, crafted products, enchant scrolls and the enchanting vellum — comes from Auctionator's database
+
+> [!NOTE]
+> Vendor and crafting costs still apply: Auctionator replaces only the addon's own auction house scanning.
+
+Opt out to keep doing your own scans with `/gg auctionator off`, and turn it back on with `/gg auctionator on`. Auctionator prices are read live from Auctionator's own database and are not stored in `GreedyGoblinDB`.
 
 > [!NOTE]
 > If the auction house is closed or doesn't answer, scans abort gracefully and tell you what happened.
@@ -88,6 +106,7 @@ Hovering a recipe row opens a tooltip with the complete breakdown: every materia
 | `/gg` or `/greedygoblin` | Open or close the profit list window |
 | `/gg scan` | Start a full auction house scan |
 | `/gg unknown` | Look up prices for unknown items |
+| `/gg auctionator on\|off` | Toggle Auctionator mode (auto-enabled when Auctionator is loaded) |
 | `/gg cut <percent>` | Set the AH cut (5 for faction AH, 15 for neutral AH) |
 | `/gg reset` | Forget the recipes learned for the current character |
 | `/gg clear` | Wipe the entire database (asks for confirmation) |
@@ -96,9 +115,9 @@ Hovering a recipe row opens a tooltip with the complete breakdown: every materia
 
 For each recipe the addon computes the cheapest realistic way to obtain every reagent:
 
-1. Each material is priced at the **cheapest** of four sources: a vendor you've met, your own AH scan, [Auctionator](https://github.com/TheMouseNest/Auctionator) (when loaded), or crafting it with a recipe you know.
+1. Each material is priced at the **cheapest** of these sources: a vendor you've met, your own AH scan, [Auctionator](https://github.com/TheMouseNest/Auctionator)'s database (the sole market source in [Auctionator mode](#auctionator-mode)), or crafting it with a recipe you know.
 2. Crafted material costs are resolved **recursively**, up to 4 levels deep, with cycle protection — so e.g. *Saronite Ore → Smelted Bar → Crafted Item* chains are all explored and the best option wins.
-3. The material cost is the sum of the reagent costs. The sell price is the lowest AH buyout of the product (times the average craft yield), minus the AH cut — with Auctionator's price and the vendor sell price as fallbacks when the AH price is unknown.
+3. The material cost is the sum of the reagent costs. The sell price is the lowest AH buyout of the product (times the average craft yield), minus the AH cut — falling back to Auctionator, then the vendor sell price, when the AH price is unknown.
 4. **Profit = sell price − material cost**, and the margin is the profit relative to the sell price.
 
 Vendor prices are picked up automatically whenever you browse a merchant that sells materials you use.
@@ -107,7 +126,7 @@ Vendor prices are picked up automatically whenever you browse a merchant that se
 
 Everything is kept in the `GreedyGoblinDB` saved variable:
 
-- **AH prices** — per realm: lowest unit buyout per item, plus scan timestamp and item count
+- **AH prices** — per realm: lowest unit buyout per item, plus scan timestamp and item count (always empty in Auctionator mode)
 - **Recipes** — per character: every recipe learned from your profession windows
 - **Vendor prices** — per item, along with the name of the vendor it was seen at
 - **Scrolls & vellums** — item IDs catalogued from AH scans, used for enchanting

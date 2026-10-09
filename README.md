@@ -22,6 +22,7 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 - 🔎 **Search bar** — a filter at the top of the window matches recipe names, or the name of any material the recipe uses (including crafting chains and the enchanting vellum)
 - 📜 **Enchanting support** — scrolls and vellums are detected on the AH, so enchanting recipes are costed and valued correctly
 - 🎯 **Missing price lookups** — a *Find Unknown Prices* action performs targeted AH searches for anything you haven't priced yet
+- 🔄 **Refresh button** — re-pull every price straight from the active source (Auctionator's database or the own scan data) and rebuild the list instantly, no rescan needed
 - 🎨 **ElvUI skin** — the window is automatically skinned when [ElvUI](https://github.com/tukui-org/ElvUI) is enabled, plain Blizzard UI otherwise
 - 📦 **Standalone** — a single `.lua` file, works with both faction and neutral auction houses
 
@@ -45,6 +46,9 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 3. **Scan the auction house** — open the AH and click **Scan AH** (or run `/gg scan`) to gather prices for everything on sale.
 4. **Fill in the gaps** — click **Find Unknown Prices** (or `/gg unknown`) to look up items that had no price yet.
 5. Repeat step 3–4 occasionally to keep prices fresh, especially after patch days.
+
+> [!NOTE]
+> In [Auctionator mode](#auctionator-mode), steps 3–4 are replaced by the **Refresh Prices** button (or `/gg refresh`): it re-pulls the latest prices straight from Auctionator's database without touching the auction house (see [Refresh prices](#refresh-prices)).
 
 > [!NOTE]
 > With Auctionator already installed when you first set the addon up, steps 3–4 are not needed: GreedyGoblin enables **Auctionator mode** on first install (it says so in the chat window) and takes every market price from Auctionator instead (see [Auctionator mode](#auctionator-mode)).
@@ -71,6 +75,10 @@ Click any column header to sort by it (click again to reverse). Rows with unknow
 
 A filter box at the top of the window matches recipes against the **recipe name** and the names of **every material shown in the row tooltip** — including the cheaper crafting sources of those materials, and the enchanting vellum (searching `vellum` lists all enchanting recipes). Matching is case-insensitive; while a filter is active, the status bar shows *N of M recipes shown*. Escape clears the text (a second press releases focus), and column sorting applies to the filtered list.
 
+### Refresh prices
+
+The **Refresh Prices** button in the bottom-right corner of the window (or `/gg refresh`) drops every cached cost and re-reads every market price from the active source — Auctionator's live database in [Auctionator mode](#auctionator-mode), otherwise the addon's own stored AH scan — then rebuilds the whole list from the top, keeping the current sort order and search filter. It is available in both modes, never contacts the auction house, and can be used anytime: the quickest way to pick up fresh prices after browsing or searching the AH with Auctionator while the window is open. It is safe to use while a scan or lookup is running.
+
 ### Scanning the auction house
 
 The **Scan AH** and **Find Unknown Prices** buttons are hidden while [Auctionator mode](#auctionator-mode) is active.
@@ -86,7 +94,7 @@ The **Scan AH** and **Find Unknown Prices** buttons are hidden while [Auctionato
 On first install, GreedyGoblin checks whether Auctionator is loaded, stores the decision, and informs you in the chat window which price source is active. From then on the stored choice is used (toggle it anytime with `/gg auctionator on|off`). While the mode is on:
 
 - every market price — materials, crafted products, enchant scrolls and the enchanting vellum — comes from Auctionator's database
-- no **Scan AH**, **Find Unknown Prices** or **Clear Database** buttons — the whole own-scan machinery is off
+- no **Scan AH**, **Find Unknown Prices** or **Clear Database** buttons — the whole own-scan machinery is off (**Refresh Prices** stays, since it only reads Auctionator's database)
 - all previously scanned AH data (prices, scroll and vellum registries) is cleared automatically
 
 > [!NOTE]
@@ -111,6 +119,7 @@ Hovering a recipe row opens a tooltip with the complete breakdown: every materia
 | `/gg` or `/greedygoblin` | Open or close the profit list window |
 | `/gg scan` | Start a full auction house scan |
 | `/gg unknown` | Look up prices for unknown items |
+| `/gg refresh` | Re-read all prices from the active source (Auctionator or the own AH scan) and rebuild the list |
 | `/gg auctionator on\|off` | Toggle Auctionator mode (decided automatically at first install) |
 | `/gg cut <percent>` | Set the AH cut (5 for faction AH, 15 for neutral AH) |
 | `/gg reset` | Forget the recipes learned for the current character |

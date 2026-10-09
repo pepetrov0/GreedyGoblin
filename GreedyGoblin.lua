@@ -4,6 +4,8 @@
 -- * scans the whole auction house itself
 -- * Auctionator support: on at first install when detected (/gg auctionator on|off)
 -- * top search bar: filter the list by recipe name or material names
+-- * Refresh Prices button (/gg refresh): re-pull the list with fresh prices
+--   from Auctionator or the own AH database, without rescanning
 -- * one window, one tooltip (cost / sell price / profit), no other hooks
 ------------------------------------------------------------------------
 local GG = {}
@@ -398,6 +400,17 @@ function GG:Compute()
 	self:RefreshList()
 end
 
+-- Explicit refresh (Refresh Prices button / /gg refresh): drop every cached
+-- cost and re-pull every price from the active source (Auctionator's live
+-- database, or the own AH scan data), then rebuild the whole list from the top.
+function GG:RefreshPrices()
+	local bar = _G["GreedyGoblinScrollScrollBar"]
+	if bar then bar:SetValue(0) end -- start the fresh list from the top
+	self:Compute()
+	Print(AuctionatorMode() and "List rebuilt with the latest Auctionator prices."
+						or "List rebuilt from your own AH scan data.")
+end
+
 ------------------------------------------------------------------------
 -- Auction house scan
 ------------------------------------------------------------------------
@@ -691,6 +704,7 @@ function GG:SkinWindow(f)
 		if S.HandleCloseButton then S:HandleCloseButton(f.close) end
 		if S.HandleButton then S:HandleButton(f.scanBtn) end
 		if S.HandleButton and f.unknownBtn then S:HandleButton(f.unknownBtn) end
+		if S.HandleButton and f.refreshBtn then S:HandleButton(f.refreshBtn) end
 		if S.HandleButton and f.clearBtn then S:HandleButton(f.clearBtn) end
 		local bar = _G["GreedyGoblinScrollScrollBar"]
 		if bar and S.HandleScrollBar then S:HandleScrollBar(bar) end
@@ -930,10 +944,29 @@ function GG:CreateWindow()
 	f.status:SetWidth(800)
 	f.status:SetJustifyH("LEFT")
 
+	-- The Refresh button owns the bottom-right corner; the scan buttons chain
+	-- off its left side. Scan/unknown are hidden in Auctionator mode, but the
+	-- Refresh button stays, pinned to the corner in every mode.
+	local refreshBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+	refreshBtn:SetWidth(110)
+	refreshBtn:SetHeight(26)
+	refreshBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -34, 26)
+	refreshBtn:SetText("Refresh Prices")
+	refreshBtn:SetScript("OnClick", function() GG:RefreshPrices() end)
+	refreshBtn:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:AddLine("Refresh Prices", 1, 0.82, 0)
+		GameTooltip:AddLine("Re-pull every price from the active source", 0.9, 0.9, 0.9)
+		GameTooltip:AddLine("(Auctionator or the own AH db) and rebuild the list.", 0.9, 0.9, 0.9)
+		GameTooltip:Show()
+	end)
+	refreshBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	f.refreshBtn = refreshBtn
+
 	local scanBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
 	scanBtn:SetWidth(130)
 	scanBtn:SetHeight(26)
-	scanBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -34, 26)
+	scanBtn:SetPoint("RIGHT", refreshBtn, "LEFT", -10, 0)
 	scanBtn:SetText("Scan AH")
 	scanBtn:SetScript("OnClick", function() GG:StartScan() end)
 	f.scanBtn = scanBtn
@@ -1036,27 +1069,24 @@ end
 function GG:UpdateButtons()
 	local f = self.frame
 	if not f then return end
-	if AuctionatorMode() then
-		if f.scanBtn then f.scanBtn:Hide() end
-		if f.unknownBtn then f.unknownBtn:Hide() end
-		if f.clearBtn then f.clearBtn:Hide() end
-		if f.status then
-			f.status:ClearAllPoints()
-			f.status:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 32, 26)
-		end
-		f:SetHeight(632) -- no button row: pull the foot in
-		return
+	-- One foot layout for both modes: the Refresh button now always lives in
+	-- the bottom-right corner, so the window keeps its full height everywhere
+	-- and only the own-scan buttons hide in Auctionator mode.
+	local auct = AuctionatorMode()
+	local function showBtn(b, show)
+		if not b then return end
+		if show then b:Show() else b:Hide() end
 	end
-	if f.scanBtn then f.scanBtn:Show() end
-	if f.unknownBtn then f.unknownBtn:Show() end
-	if f.clearBtn then f.clearBtn:Show() end
+	showBtn(f.scanBtn, not auct)
+	showBtn(f.unknownBtn, not auct)
+	showBtn(f.clearBtn, not auct)
 	if f.status then
 		f.status:ClearAllPoints()
 		f.status:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 32, 66)
 	end
 	f:SetHeight(672)
 	local canAll, canQuery = false, false
-	if self.ahOpen and not scan then
+	if not auct and self.ahOpen and not scan then
 		local q, a = CanSendAuctionQuery()
 		canQuery, canAll = q and true or false, a and true or false
 	end
@@ -1097,6 +1127,8 @@ SlashCmdList["GREEDYGOBLIN"] = function(msg)
 		StaticPopup_Show("GREEDYGOBLIN_CLEAR")
 	elseif cmd == "unknown" then
 		GG:StartUnknownScan()
+	elseif cmd == "refresh" then
+		GG:RefreshPrices()
 	elseif cmd == "auctionator" then
 		if rest == "on" or rest == "off" then
 			db.auctMode = (rest == "on")
@@ -1127,7 +1159,7 @@ SlashCmdList["GREEDYGOBLIN"] = function(msg)
 		GG:Compute()
 		Print("Forgot the recipes stored for this character.")
 	else
-		Print("/gg  |  /gg scan  |  /gg unknown  |  /gg auctionator on|off  |  /gg cut <percent>  |  /gg reset  |  /gg clear")
+		Print("/gg  |  /gg scan  |  /gg unknown  |  /gg refresh  |  /gg auctionator on|off  |  /gg cut <percent>  |  /gg reset  |  /gg clear")
 	end
 end
 

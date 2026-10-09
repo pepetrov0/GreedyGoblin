@@ -1039,10 +1039,12 @@ function GG:UpdateButtons()
 	if AuctionatorMode() then
 		if f.scanBtn then f.scanBtn:Hide() end
 		if f.unknownBtn then f.unknownBtn:Hide() end
+		if f.clearBtn then f.clearBtn:Hide() end
 		return
 	end
 	if f.scanBtn then f.scanBtn:Show() end
 	if f.unknownBtn then f.unknownBtn:Show() end
+	if f.clearBtn then f.clearBtn:Show() end
 	local canAll, canQuery = false, false
 	if self.ahOpen and not scan then
 		local q, a = CanSendAuctionQuery()

@@ -16,7 +16,7 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 
 - 🏭 **Automatic recipe learning** — open each of your profession windows once and every recipe is remembered, including reagents and average craft yield
 - 🔍 **Self-contained AH scanner** — performs its own get-all scan of the auction house and stores the lowest buyout for every item seen, per realm
-- 🔌 **Auctionator mode** — when [Auctionator](https://github.com/TheMouseNest/Auctionator) is loaded, its price database is the sole source of market prices: no own scanning, no AH data kept, scan buttons hidden. Opt out with `/gg auctionator off` to restore the built-in scanner
+- 🔌 **Auctionator mode** — when Auctionator is present at first install, its price database becomes the sole source of market prices: no own scanning, no AH data kept, scan buttons hidden. A chat message tells you which source is active, and the choice can be toggled anytime with `/gg auctionator on|off`
 - 🏷️ **Smart material costing** — every material is priced at the cheapest of vendor, auction house, or crafting it yourself (resolved recursively up to 4 levels deep)
 - 💰 **Profit at a glance** — sortable list with materials cost, sell price after the AH cut, profit and margin; hover a row for the full cost breakdown
 - 📜 **Enchanting support** — scrolls and vellums are detected on the AH, so enchanting recipes are costed and valued correctly
@@ -46,7 +46,7 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 5. Repeat step 3–4 occasionally to keep prices fresh, especially after patch days.
 
 > [!NOTE]
-> With Auctionator installed, steps 3–4 are not needed: GreedyGoblin switches to **Auctionator mode** on its own and takes every market price from Auctionator instead (see [Auctionator mode](#auctionator-mode)).
+> With Auctionator already installed when you first set the addon up, steps 3–4 are not needed: GreedyGoblin enables **Auctionator mode** on first install (it says so in the chat window) and takes every market price from Auctionator instead (see [Auctionator mode](#auctionator-mode)).
 
 > [!TIP]
 > The addon assumes the faction AH cut of 5%. If you post on a neutral auction house, set the cut first with `/gg cut 15`.
@@ -78,11 +78,11 @@ The **Scan AH** and **Find Unknown Prices** buttons are hidden while [Auctionato
 
 ### Auctionator mode
 
-When Auctionator is loaded, GreedyGoblin enables **Auctionator mode** automatically:
+On first install, GreedyGoblin checks whether Auctionator is loaded, stores the decision, and informs you in the chat window which price source is active. From then on the stored choice is used (toggle it anytime with `/gg auctionator on|off`). While the mode is on:
 
+- every market price — materials, crafted products, enchant scrolls and the enchanting vellum — comes from Auctionator's database
 - no **Scan AH** / **Find Unknown Prices** buttons — the whole own-scan machinery is off
 - all previously scanned AH data (prices, scroll and vellum registries) is cleared automatically
-- every market price — materials, crafted products, enchant scrolls and the enchanting vellum — comes from Auctionator's database
 
 > [!NOTE]
 > Vendor and crafting costs still apply: Auctionator replaces only the addon's own auction house scanning.
@@ -106,7 +106,7 @@ Hovering a recipe row opens a tooltip with the complete breakdown: every materia
 | `/gg` or `/greedygoblin` | Open or close the profit list window |
 | `/gg scan` | Start a full auction house scan |
 | `/gg unknown` | Look up prices for unknown items |
-| `/gg auctionator on\|off` | Toggle Auctionator mode (auto-enabled when Auctionator is loaded) |
+| `/gg auctionator on\|off` | Toggle Auctionator mode (decided automatically at first install) |
 | `/gg cut <percent>` | Set the AH cut (5 for faction AH, 15 for neutral AH) |
 | `/gg reset` | Forget the recipes learned for the current character |
 | `/gg clear` | Wipe the entire database (asks for confirmation) |
@@ -131,6 +131,7 @@ Everything is kept in the `GreedyGoblinDB` saved variable:
 - **Vendor prices** — per item, along with the name of the vendor it was seen at
 - **Scrolls & vellums** — item IDs catalogued from AH scans, used for enchanting
 - **AH cut** — your configured auction house cut (default 5%)
+- **Auctionator mode** — on or off, decided automatically at first install based on whether Auctionator is detected
 
 > [!NOTE]
 > Auctionator prices are read live from Auctionator's own database and are never stored in `GreedyGoblinDB`.

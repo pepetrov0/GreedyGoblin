@@ -18,9 +18,10 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 - 🔍 **Self-contained AH scanner** — performs its own get-all scan of the auction house and stores the lowest buyout for every item seen, per realm
 - 🔌 **Auctionator mode** — when Auctionator is present at first install, its price database becomes the sole source of market prices: no own scanning, no AH data kept, scan buttons hidden. A chat message tells you which source is active, and the choice can be toggled anytime with `/gg auctionator on|off`
 - 🏷️ **Smart material costing** — every material is priced at the cheapest of vendor, auction house, or crafting it yourself (resolved recursively up to 4 levels deep)
+- 🧙 **Alt crafting** — recipes learned on your other characters of the realm also count as ways to craft a material yourself (`/gg alts on|off`, on by default)
 - 💰 **Profit at a glance** — sortable list with materials cost, sell price after the AH cut, profit and margin; hover a row for the full cost breakdown
 - 🔎 **Search bar** — a filter at the top of the window matches recipe names, or the name of any material the recipe uses (including crafting chains and the enchanting vellum)
-- 📜 **Enchanting support** — scrolls and vellums are detected on the AH, so enchanting recipes are costed and valued correctly
+- 📜 **Enchanting support** — scrolls and vellums are detected on the AH, so enchanting recipes are costed and valued correctly; each vellum is priced at the cheaper of buying or crafting it (e.g. on an Inscription alt)
 - 🎯 **Missing price lookups** — a *Find Unknown Prices* action performs targeted AH searches for anything you haven't priced yet
 - 🔄 **Refresh button** — re-pull every price straight from the active source (Auctionator's database or the own scan data) and rebuild the list instantly, no rescan needed
 - 🎨 **ElvUI skin** — the window is automatically skinned when [ElvUI](https://github.com/tukui-org/ElvUI) is enabled, plain Blizzard UI otherwise
@@ -55,6 +56,9 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 
 > [!TIP]
 > The addon assumes the faction AH cut of 5%. If you post on a neutral auction house, set the cut first with `/gg cut 15`.
+
+> [!TIP]
+> Your other characters can craft, too: with [alt crafting](#alt-crafting) on, recipes learned on any character of the current realm count as ways to craft a material. Open each profession window on an alt once to make its recipes available to the others.
 
 ## Usage
 
@@ -105,12 +109,20 @@ Opt out to keep doing your own scans with `/gg auctionator off`, and turn it bac
 > [!NOTE]
 > If the auction house is closed or doesn't answer, scans abort gracefully and tell you what happened.
 
+### Alt crafting
+
+With **alt crafting** on (the default), recipes learned on any other character of the current realm count as ways to craft a material yourself. A material is then costed at the cheapest of vendor, market price, crafting it with a recipe of the current character, or crafting it on one of your alts — the row tooltip appends the owning alt's name to a crafting source, e.g. `craft: Inscription, Gnomie` instead of plain `craft: Inscription`.
+
+Toggle with `/gg alts off` (only the recipes of the current character are used) and back with `/gg alts on`. `/gg alts` without an argument lists every character of the current realm together with the recipes it has learned. Recipes are stored per character (see [Data storage](#data-storage)): open each profession window on an alt once to make its recipes available to the rest.
+
+The same applies to the enchanting vellum: when an alt — e.g. an Inscriber — has learned to craft one, every vellum is priced at the cheaper of buying it on the AH or crafting it, and the tooltip shows the chosen vellum with its source and, when crafted, its materials.
+
 ### Row tooltip
 
-Hovering a recipe row opens a tooltip with the complete breakdown: every material with its quantity, its cheapest source (vendor & NPC name, AH, auctionator, or `craft: Profession` for materials you can make yourself), the vellum cost for enchants, the AH cut and the final profit.
+Hovering a recipe row opens a tooltip with the complete breakdown: every material with its quantity, its cheapest source (vendor & NPC name, AH, auctionator, or `craft: Profession` — with the alt's name appended when the recipe belongs to another character — for materials you or your alts can make), the vellum cost for enchants (see [Alt crafting](#alt-crafting)), the AH cut and the final profit.
 
 > [!IMPORTANT]
-> Enchanting recipes have no crafted product: the addon prices scrolls of the enchant found on the AH and includes the priciest vellum it has seen on sale in the material cost.
+> Enchanting recipes have no crafted product: the addon prices scrolls of the enchant found on the AH and includes the priciest vellum in the material cost — every vellum is priced at the cheaper of buying it on the AH or crafting it (see [Alt crafting](#alt-crafting)).
 
 ## Slash commands
 
@@ -121,6 +133,7 @@ Hovering a recipe row opens a tooltip with the complete breakdown: every materia
 | `/gg unknown` | Look up prices for unknown items |
 | `/gg refresh` | Re-read all prices from the active source (Auctionator or the own AH scan) and rebuild the list |
 | `/gg auctionator on\|off` | Toggle Auctionator mode (decided automatically at first install) |
+| `/gg alts on\|off` | Toggle [alt crafting](#alt-crafting) (on by default); without an argument, list the recipes every character of the current realm has learned |
 | `/gg cut <percent>` | Set the AH cut (5 for faction AH, 15 for neutral AH) |
 | `/gg reset` | Forget the recipes learned for the current character |
 | `/gg clear` | Wipe the entire database (asks for confirmation) |
@@ -129,7 +142,7 @@ Hovering a recipe row opens a tooltip with the complete breakdown: every materia
 
 For each recipe the addon computes the cheapest realistic way to obtain every reagent:
 
-1. Each material is priced at the **cheapest** of these sources: a vendor you've met, your own AH scan, [Auctionator](https://github.com/TheMouseNest/Auctionator)'s database (the sole market source in [Auctionator mode](#auctionator-mode)), or crafting it with a recipe you know.
+1. Each material is priced at the **cheapest** of these sources: a vendor you've met, your own AH scan, [Auctionator](https://github.com/TheMouseNest/Auctionator)'s database (the sole market source in [Auctionator mode](#auctionator-mode)), or crafting it with a recipe known on this or any other character of the realm (see [Alt crafting](#alt-crafting)).
 2. Crafted material costs are resolved **recursively**, up to 4 levels deep, with cycle protection — so e.g. *Saronite Ore → Smelted Bar → Crafted Item* chains are all explored and the best option wins.
 3. The material cost is the sum of the reagent costs. The sell price is the lowest AH buyout of the product (times the average craft yield), minus the AH cut — falling back to Auctionator, then the vendor sell price, when the AH price is unknown.
 4. **Profit = sell price − material cost**, and the margin is the profit relative to the sell price.
@@ -141,10 +154,11 @@ Vendor prices are picked up automatically whenever you browse a merchant that se
 Everything is kept in the `GreedyGoblinDB` saved variable:
 
 - **AH prices** — per realm: lowest unit buyout per item, plus scan timestamp and item count (always empty in Auctionator mode)
-- **Recipes** — per character: every recipe learned from your profession windows
+- **Recipes** — per character: every recipe learned from your profession windows; with [alt crafting](#alt-crafting) on, they also serve as craft sources for the other characters of the same realm
 - **Vendor prices** — per item, along with the name of the vendor it was seen at
 - **Scrolls & vellums** — item IDs catalogued from AH scans, used for enchanting
 - **AH cut** — your configured auction house cut (default 5%)
+- **Alt crafting** — on or off (on by default), a single toggle shared by all of your characters
 - **Auctionator mode** — on or off, decided automatically at first install based on whether Auctionator is detected
 
 > [!NOTE]

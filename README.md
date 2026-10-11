@@ -119,7 +119,7 @@ The same applies to the enchanting vellum: when an alt — e.g. an Inscriber —
 
 ### Row tooltip
 
-Hovering a recipe row opens a tooltip with the complete breakdown: every material with its quantity, its cheapest source (vendor & NPC name, AH, auctionator, or `craft: Profession` — with the alt's name appended when the recipe belongs to another character — for materials you or your alts can make), the vellum cost for enchants (see [Alt crafting](#alt-crafting)), the AH cut and the final profit.
+Hovering a recipe row opens a tooltip with the complete breakdown: every material with its quantity, its cheapest source (vendor, AH, auctionator, or `craft: Profession` — with the alt's name appended when the recipe belongs to another character — for materials you or your alts can make), the vellum cost for enchants (see [Alt crafting](#alt-crafting)), the AH cut and the final profit.
 
 > [!IMPORTANT]
 > Enchanting recipes have no crafted product: the addon prices scrolls of the enchant found on the AH and includes the priciest vellum in the material cost — every vellum is priced at the cheaper of buying it on the AH or crafting it (see [Alt crafting](#alt-crafting)).
@@ -155,7 +155,7 @@ Everything is kept in the `GreedyGoblinDB` saved variable:
 
 - **AH prices** — per realm: lowest unit buyout per item, plus scan timestamp and item count (always empty in Auctionator mode)
 - **Recipes** — per character: every recipe learned from your profession windows; with [alt crafting](#alt-crafting) on, they also serve as craft sources for the other characters of the same realm
-- **Vendor prices** — per item, along with the name of the vendor it was seen at
+- **Vendor prices** — per item, the lowest unit price seen at any merchant
 - **Scrolls & vellums** — item IDs catalogued from AH scans, used for enchanting
 - **AH cut** — your configured auction house cut (default 5%)
 - **Alt crafting** — on or off (on by default), a single toggle shared by all of your characters

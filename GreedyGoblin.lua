@@ -8,6 +8,9 @@
 --   from Auctionator or the own AH database, without rescanning
 -- * alt crafting: a material can also be crafted by any other character of the
 --   realm whose recipes were learned (/gg alts on|off, on by default)
+-- * vellum support: every enchant is matched to the vellum it needs (Armor or
+--   Weapon, tier I/II/III) and costed at the cheapest of AH / craft / vendor
+--   (/gg vellum shows the current vellum prices)
 -- * one window, one tooltip (cost / sell price / profit), no other hooks
 ------------------------------------------------------------------------
 local GG = {}
@@ -22,9 +25,39 @@ local DB_VERSION = 2
 
 -- every WotLK enchanting vellum, so the vellum price can come straight from
 -- Auctionator when there are no own AH scans that have spotted them
-local VELLUM_NAMES = {
-	"Weapon Vellum", "Weapon Vellum II", "Weapon Vellum III",
-	"Armor Vellum", "Armor Vellum II", "Armor Vellum III",
+-- Vellums, by item id. Each vellum only absorbs enchants up to a level
+-- restriction: tier I = enchants with no restriction, II = 35 or lower,
+-- III = 60 or lower. A higher tier can also hold the enchants of a lower one.
+local VELLUM_ID = {
+	Armor  = { 38682, 37602, 43145 },   -- Armor Vellum, II, III
+	Weapon = { 39349, 39350, 43146 },   -- Weapon Vellum, II, III
+}
+local VELLUM_LIMIT = { 0, 35, 60 }
+-- only used for display / AH search text until the client has the item cached
+local VELLUM_FALLBACK = {
+	Armor  = { "Armor Vellum", "Armor Vellum II", "Armor Vellum III" },
+	Weapon = { "Weapon Vellum", "Weapon Vellum II", "Weapon Vellum III" },
+}
+
+local function VellumName(kind, tier)
+	return GetItemInfo(VELLUM_ID[kind][tier]) or VELLUM_FALLBACK[kind][tier]
+end
+
+-- smallest tier whose limit covers the enchant's level restriction
+local function TierForLevel(lvl)
+	for t = 1, 3 do
+		if lvl <= VELLUM_LIMIT[t] then return t end
+	end
+	return 3
+end
+
+-- Fallback for recipes learned before levels were stored (reopen the Enchanting
+-- window to learn the exact level): guess from the enchant's materials.
+-- BC: Arcane Dust, Greater/Lesser Planar Essence, Small/Large Prismatic Shard, Void Crystal
+-- Wrath: Dream Shard, Infinite Dust, Greater/Lesser Cosmic Essence, Abyss Crystal
+local MAT_TIER = {
+	[22445] = 2, [22446] = 2, [22447] = 2, [22448] = 2, [22449] = 2, [22450] = 2,
+	[34052] = 3, [34054] = 3, [34055] = 3, [34056] = 3, [34057] = 3,
 }
 
 ------------------------------------------------------------------------
@@ -85,6 +118,11 @@ local function AltsEnabled() return db.useAlts ~= false end
 ------------------------------------------------------------------------
 local function AuctionatorPrice(id, name)
 	if not id and not name then return nil end
+	if not id and name then
+		-- the current API only takes ids: resolve it from the (cached) item name
+		local link = select(2, GetItemInfo(name))
+		id = ItemID(link)
+	end
 
 	local api = Auctionator and Auctionator.API and Auctionator.API.v1
 	if api and api.GetAuctionPriceByItemID then
@@ -171,8 +209,15 @@ local function LearnTradeSkill()
 					ok = false
 				end
 			end
+			-- enchants: the level restriction in the description ("Requires a level
+			-- 60 or higher item", none = no restriction) decides the vellum tier
+			local lvl
+			if not product and GetTradeSkillDescription then
+				local desc = GetTradeSkillDescription(i)
+				if desc and desc ~= "" then lvl = tonumber(desc:match("[Ll]evel (%d+)")) or 0 end
+			end
 			if ok and #reagents > 0 then
-				list[#list + 1] = { name = name, prof = prof, product = product, made = made, reagents = reagents }
+				list[#list + 1] = { name = name, prof = prof, product = product, made = made, reagents = reagents, lvl = lvl }
 			end
 		end
 	end
@@ -199,8 +244,7 @@ end
 local MAX_DEPTH = 4
 local memo, byProduct = {}, {}
 local ownerOf = {}      -- [recipe] = alt's name, only for recipes of OTHER characters
-local vellumPrice       -- price of the priciest vellum (cheapest source for each), nil if none known
-local vellumNode        -- the costing node behind vellumPrice when it is craftable (nil = plain AH price)
+local vellumCache = {}  -- [vellum name] = { cost, node } or false (no price known), valid until the next BuildIndex
 
 -- Character keys whose recipes may be used: this character first (so it wins
 -- ties), then, if enabled, every other character stored for this realm.
@@ -220,7 +264,7 @@ local function CrafterKeys()
 end
 
 local function BuildIndex()
-	byProduct, memo, ownerOf, vellumPrice, vellumNode = {}, {}, {}, nil, nil
+	byProduct, memo, ownerOf, vellumCache = {}, {}, {}, {}
 	local me = CharKey()
 	local prefix = GetRealmName() .. "-"
 	for _, key in ipairs(CrafterKeys()) do
@@ -275,41 +319,49 @@ local function Node(id, name, visiting, depth)
 	return node
 end
 
-local function IsVellumName(n)
-	return n and n:find("Vellum", 1, true) and not n:find("Ruined", 1, true)
+------------------------------------------------------------------------
+-- Vellums: which one an enchant needs, and what it costs
+------------------------------------------------------------------------
+local function EnchantingName()
+	return (GetSpellInfo and GetSpellInfo(7411)) or "Enchanting"
 end
 
--- Vellum cost for enchanting recipes: the priciest vellum, where each vellum
--- costs the cheaper of buying it or crafting it (e.g. on an Inscription alt).
-local function ComputeVellum()
-	local best, bestNode
-	local function consider(price, node)
-		if price and (not best or price > best) then best, bestNode = price, node end
-	end
+-- Cheapest way to get one vellum (by item id): vendor, AH, Auctionator or
+-- crafting it (e.g. on an Inscription alt). Returns { cost =, node =, id = } or nil.
+local function VellumOption(kind, tier)
+	local id = VELLUM_ID[kind][tier]
+	local c = vellumCache[id]
+	if c ~= nil then return c or nil end
+	local node = Node(id, VellumName(kind, tier), {}, 1)
+	local opt = node.cost and { cost = node.cost, node = node, id = id } or false
+	vellumCache[id] = opt
+	return opt or nil
+end
 
-	-- vellums that a known character can craft: Node() picks AH vs craft
-	local crafted = {}
-	for id, recs in pairs(byProduct) do
-		local name = recs[1].name
-		if IsVellumName(name) then
-			crafted[id], crafted[name] = true, true
-			local node = Node(id, name, {}, 1)
-			consider(node.cost, node)
-		end
+-- Cheapest vellum that can hold an enchant of `tier` (a higher tier works too).
+local function BestVellum(kind, tier)
+	local best
+	for t = tier, 3 do
+		local opt = VellumOption(kind, t)
+		if opt and (not best or opt.cost < best.cost) then best = opt end
 	end
+	return best
+end
 
-	-- every other vellum: plain market price
-	if AuctionatorMode() then
-		for _, nm in ipairs(VELLUM_NAMES) do
-			if not crafted[nm] then consider(AuctionatorPrice(nil, nm)) end
-		end
-	else
-		for id in pairs(db.vellums) do
-			if not crafted[id] then consider(AHPrice(id) or AuctionatorPrice(id)) end
-		end
+-- Weapon or Armor vellum, which tier, and whether the enchant can go on a
+-- vellum at all (ring enchants are enchanter-only and cannot).
+-- Returns kind, tier, guessed.
+local function EnchantVellumReq(r)
+	local name = r.name or ""
+	if name:find("Ring", 1, true) then return nil end
+	local kind = (name:find("Weapon", 1, true) or name:find("Staff", 1, true)) and "Weapon" or "Armor"
+	if r.lvl then return kind, TierForLevel(r.lvl), false end
+	local tier = 1
+	for _, rg in ipairs(r.reagents) do
+		local t = MAT_TIER[rg.id]
+		if t and t > tier then tier = t end
 	end
-
-	vellumPrice, vellumNode = best, bestNode
+	return kind, tier, true
 end
 
 local function Evaluate(r)
@@ -323,13 +375,27 @@ local function Evaluate(r)
 		res.kids[#res.kids + 1] = { n = rg.n, node = node }
 		if node.cost then cost = cost + node.cost * rg.n else res.missing[#res.missing + 1] = node.name end
 	end
-	if not r.product then
-		res.enchant, res.vellum, res.vellumNode = true, vellumPrice, vellumNode
-		cost = cost + (vellumPrice or 0)
+	local isEnchant = not r.product and r.prof == EnchantingName()
+	if isEnchant then
+		res.enchant = true
+		local kind, tier, guessed = EnchantVellumReq(r)
+		if kind then
+			res.vellumKind, res.vellumTier, res.vellumNeed = kind, tier, VellumName(kind, tier)
+			res.enchLevel, res.vellumGuess = r.lvl, guessed
+			local opt = BestVellum(kind, tier)
+			if opt then
+				res.vellum, res.vellumNode = opt.cost, opt.node
+				cost = cost + opt.cost
+			else
+				res.missing[#res.missing + 1] = res.vellumNeed
+			end
+		else
+			res.noScroll = true -- ring enchants: enchanter only, no vellum, no scroll
+		end
 	end
 	if #res.missing == 0 then res.cost = cost end
 
-	if not r.product then
+	if isEnchant and not res.noScroll then
 		-- enchant: the product is the scroll (enchant put on a vellum), found by name
 		local p
 		for _, nm in ipairs({ "Scroll of " .. r.name, r.name }) do
@@ -412,6 +478,8 @@ local function ApplyFilter()
 	local view = {}
 	for _, res in ipairs(GG.results or {}) do
 		if (res.name and res.name:lower():find(text, 1, true))
+			or (res.vellumNeed and res.vellumNeed:lower():find(text, 1, true))
+			or (res.vellumNode and res.vellumNode.name and res.vellumNode.name:lower():find(text, 1, true))
 			or (res.enchant and string.find("vellum", text, 1, true))
 			or KidsMatch(res.kids, text) then
 			view[#view + 1] = res
@@ -445,7 +513,6 @@ end
 
 function GG:Compute()
 	BuildIndex()
-	ComputeVellum()
 	local res = {}
 	for _, list in pairs(db.recipes[CharKey()] or {}) do
 		for _, r in ipairs(list) do res[#res + 1] = Evaluate(r) end
@@ -482,7 +549,6 @@ local function FinishScan()
 	for _ in pairs(scan.p) do n = n + 1 end
 	db.ah[GetRealmName()] = { t = time(), n = n, p = scan.p }
 	for name, id in pairs(scan.scrolls) do db.scrolls[name] = id end
-	for id in pairs(scan.vellums) do db.vellums[id] = true end
 	scan = nil
 	Print(format("Scan complete: prices for %d different items.", n))
 	GG:UpdateButtons()
@@ -497,8 +563,6 @@ local function AddAuction(i)
 		if id then
 			if name and (name:find("^Scroll of Enchant") or name:find("^Enchant ")) then
 				scan.scrolls[name] = id -- enchant scrolls, looked up by name for enchanting recipes
-			elseif name and name:find("Vellum") and not name:find("Ruined") then
-				scan.vellums[id] = true
 			end
 			local unit = floor(buyout / count)
 			local cur = scan.p[id]
@@ -529,7 +593,6 @@ local function CollectUnknown()
 		end
 	end
 
-	local anyEnchant
 	for _, res in ipairs(GG.results or {}) do
 		local r = res.r
 		if r.product then
@@ -537,18 +600,23 @@ local function CollectUnknown()
 				add(r.product, { id = r.product, name = GetItemInfo(r.product) or r.name })
 			end
 		else
-			anyEnchant = true
-			if not res.scroll then add("scroll:" .. r.name, { name = r.name, scroll = true }) end
+			if res.enchant and not res.noScroll and not res.scroll then add("scroll:" .. r.name, { name = r.name, scroll = true }) end
+			-- the vellum this enchant needs (or a higher tier) has no price yet
+			if res.vellumKind and not res.vellum then
+				for t = res.vellumTier, 3 do
+					if not VellumOption(res.vellumKind, t) then
+						add("vellum:" .. VELLUM_ID[res.vellumKind][t], { id = VELLUM_ID[res.vellumKind][t], name = VellumName(res.vellumKind, t) })
+					end
+				end
+			end
 		end
 	end
-	if anyEnchant and not vellumPrice then add("vellum", { name = "Vellum", vellum = true }) end
 	return list
 end
 
 local function Matches(t, id, name)
 	if t.id then return id == t.id end
 	if t.scroll then return name == t.name or name == "Scroll of " .. t.name end
-	if t.vellum then return name:find("Vellum", 1, true) and not name:find("Ruined", 1, true) end
 end
 
 local function CommitUnknownItem()
@@ -561,7 +629,6 @@ local function CommitUnknownItem()
 		if not d.p[id] then d.n = d.n + 1; scan.found = scan.found + 1 end
 		if not d.p[id] or price < d.p[id] then d.p[id] = price end
 		if t.scroll then db.scrolls[scan.names[id]] = id end
-		if t.vellum then db.vellums[id] = true end
 	end
 	scan.state = "next"
 end
@@ -656,7 +723,7 @@ function GG:StartScan()
 	if scan then Print("A scan is already running.") return end
 	local _, canAll = CanSendAuctionQuery()
 	if not canAll then Print("The full scan is on cooldown, try again later.") return end
-	scan = { mode = "all", p = {}, scrolls = {}, vellums = {}, state = "ready", sentAt = GetTime() }
+	scan = { mode = "all", p = {}, scrolls = {}, state = "ready", sentAt = GetTime() }
 	Print("Scanning the whole auction house...")
 	self:UpdateButtons()
 	self:UpdateStatus()
@@ -826,14 +893,25 @@ local function ShowRowTooltip(row, res)
 	tt:AddLine(res.name .. (res.made > 1 and (" x" .. Qty(res.made)) or ""), 1, 0.82, 0)
 	tt:AddLine(" ")
 	AddKids(tt, res.kids, 1, "")
-	if res.enchant then
+	if res.noScroll then
+		tt:AddLine("Ring enchant: enchanter only, cannot be put on a vellum", 0.6, 0.6, 0.6)
+	elseif res.enchant and res.vellumNeed then
 		local vn = res.vellumNode
 		if vn then
 			tt:AddDoubleLine("Vellum: " .. vn.name .. " " .. (SRC_COLOR[vn.src] or "") .. "(" .. SrcLabel(vn) .. ")|r",
 				Money(res.vellum), 1, 1, 1, 1, 1, 1)
 			if vn.src == "craft" then AddKids(tt, vn.kids, 1 / vn.rec.made, "   ") end
+			if res.enchLevel then
+				tt:AddLine("   enchant level restriction " .. res.enchLevel, 0.6, 0.6, 0.6)
+			elseif res.vellumGuess then
+				tt:AddLine("   tier guessed from materials, reopen Enchanting to read the level", 0.6, 0.6, 0.6)
+			end
+			if vn.name ~= res.vellumNeed then
+				tt:AddLine("   needs " .. res.vellumNeed .. ", the higher tier is cheaper", 0.6, 0.6, 0.6)
+			end
 		else
-			tt:AddDoubleLine("Vellum (priciest on AH)", Money(res.vellum), 1, 1, 1, 1, 1, 1)
+			tt:AddDoubleLine("Vellum: " .. res.vellumNeed, "|cffff4040no price|r", 1, 1, 1, 1, 1, 1)
+			if res.enchLevel then tt:AddLine("   enchant level restriction " .. res.enchLevel, 0.6, 0.6, 0.6) end
 		end
 	end
 	tt:AddLine(" ")
@@ -1209,6 +1287,20 @@ SlashCmdList["GREEDYGOBLIN"] = function(msg)
 		else
 			Print("Auctionator mode is " .. (AuctionatorMode() and "on" or "off") .. ". Usage: /gg auctionator on|off")
 		end
+	elseif cmd == "vellum" then
+		GG:Compute()
+		Print("Vellum prices (I: no level restriction, II: restriction 35 or lower, III: 60 or lower; a higher tier also works for lower enchants):")
+		for _, kind in ipairs({ "Armor", "Weapon" }) do
+			for t = 1, 3 do
+				local vn = VellumName(kind, t)
+				local opt = VellumOption(kind, t)
+				if opt then
+					DEFAULT_CHAT_FRAME:AddMessage(format("  %s: %s %s(%s)|r", vn, Money(opt.cost), SRC_COLOR[opt.node.src] or "", SrcLabel(opt.node)))
+				else
+					DEFAULT_CHAT_FRAME:AddMessage(format("  %s: |cff888888no price known|r", vn))
+				end
+			end
+		end
 	elseif cmd == "cut" then
 		local n = tonumber(rest)
 		if not n or n < 0 or n > 50 then Print("Usage: /gg cut <percent>   (5 faction AH, 15 neutral AH)") return end
@@ -1241,7 +1333,7 @@ SlashCmdList["GREEDYGOBLIN"] = function(msg)
 		GG:Compute()
 		Print("Forgot the recipes stored for this character.")
 	else
-		Print("/gg  |  /gg scan  |  /gg unknown  |  /gg refresh  |  /gg auctionator on|off  |  /gg alts on|off  |  /gg cut <percent>  |  /gg reset  |  /gg clear")
+		Print("/gg  |  /gg scan  |  /gg unknown  |  /gg refresh  |  /gg vellum  |  /gg auctionator on|off  |  /gg alts on|off  |  /gg cut <percent>  |  /gg reset  |  /gg clear")
 	end
 end
 
@@ -1291,7 +1383,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		db.cut     = db.cut or 5
 		db.vendor  = db.vendor or {}   -- [itemID] = copper per unit
 		db.scrolls = db.scrolls or {}  -- [scroll name] = itemID, learned from AH scans
-		db.vellums = db.vellums or {}  -- [itemID] = true, every vellum seen on the AH
+		db.vellums = db.vellums or {}  -- no longer used (vellums are tracked by item id)
 		db.vendorNPC = nil -- no longer tracked: vendor prices only, no names
 		db.ah      = db.ah or {}       -- [realm] = { t = time, n = items, p = { [itemID] = lowest unit buyout } }
 		db.recipes = db.recipes or {}  -- [realm-char] = { [profession] = { recipe, ... } }

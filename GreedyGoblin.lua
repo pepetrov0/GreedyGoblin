@@ -243,17 +243,13 @@ local function Node(id, name, visiting, depth)
 	local node = { id = id, name = name or GetItemInfo(id) or ("item " .. id) }
 
 	local v = db.vendor[id]
-	if v then node.cost, node.src, node.npc = v, "vendor", db.vendorNPC[id] end
+	if v then node.cost, node.src = v, "vendor" end
 
 	local ah = AHPrice(id)
-	if ah and (not node.cost or ah < node.cost) then
-		node.cost, node.src, node.npc = ah, "AH", nil
-	end
+	if ah and (not node.cost or ah < node.cost) then node.cost, node.src = ah, "AH" end
 
 	local ap = AuctionatorPrice(id, name)
-	if ap and (not node.cost or ap < node.cost) then
-		node.cost, node.src, node.npc = ap, "auctionator", nil
-	end
+	if ap and (not node.cost or ap < node.cost) then node.cost, node.src = ap, "auctionator" end
 
 	local recs = byProduct[id]
 	if recs and depth <= MAX_DEPTH and not visiting[id] then
@@ -268,7 +264,7 @@ local function Node(id, name, visiting, depth)
 			if ok then
 				local unit = sum / r.made
 				if not node.cost or unit < node.cost then
-					node.cost, node.src, node.npc, node.rec, node.kids = unit, "craft", nil, r, kids
+					node.cost, node.src, node.rec, node.kids = unit, "craft", r, kids
 				end
 			end
 		end
@@ -643,7 +639,7 @@ StaticPopupDialogs["GREEDYGOBLIN_CLEAR"] = {
 
 function GG:ClearDatabase()
 	if scan then StopScan() end
-	db.vendor, db.vendorNPC, db.ah = {}, {}, {}
+	db.vendor, db.ah = {}, {}
 	db.recipes, db.scrolls, db.vellums = {}, {}, {}
 	for k in pairs(checked) do checked[k] = nil end
 	self:Compute()
@@ -723,7 +719,6 @@ local function RecordVendor()
 				learned[#learned + 1] = { name = mname or ("item " .. id), unit = unit }
 			end
 			db.vendor[id] = unit
-			db.vendorNPC[id] = npc
 		end
 	end
 
@@ -799,7 +794,7 @@ local SRC_COLOR = { vendor = "|cff55ff55", AH = "|cffffd100", craft = "|cff55ccf
 
 local function SrcLabel(node)
 	if node.src == "vendor" then
-		return "vendor" .. (node.npc and (": " .. node.npc) or "")
+		return "vendor"
 	elseif node.src == "craft" then
 		local who = ownerOf[node.rec]
 		return "craft: " .. node.rec.prof .. (who and (", " .. who) or "")
@@ -1297,7 +1292,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		db.vendor  = db.vendor or {}   -- [itemID] = copper per unit
 		db.scrolls = db.scrolls or {}  -- [scroll name] = itemID, learned from AH scans
 		db.vellums = db.vellums or {}  -- [itemID] = true, every vellum seen on the AH
-		db.vendorNPC = db.vendorNPC or {} -- [itemID] = name of the vendor it was seen at
+		db.vendorNPC = nil -- no longer tracked: vendor prices only, no names
 		db.ah      = db.ah or {}       -- [realm] = { t = time, n = items, p = { [itemID] = lowest unit buyout } }
 		db.recipes = db.recipes or {}  -- [realm-char] = { [profession] = { recipe, ... } }
 		Print("loaded. /gg to open, /gg scan at the auction house.")

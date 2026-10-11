@@ -20,8 +20,8 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 - 🏷️ **Smart material costing** — every material is priced at the cheapest of vendor, auction house, or crafting it yourself (resolved recursively up to 4 levels deep)
 - 🧙 **Alt crafting** — recipes learned on your other characters of the realm also count as ways to craft a material yourself (`/gg alts on|off`, on by default)
 - 💰 **Profit at a glance** — sortable list with materials cost, sell price after the AH cut, profit and margin; hover a row for the full cost breakdown
-- 🔎 **Search bar** — a filter at the top of the window matches recipe names, or the name of any material the recipe uses (including crafting chains and the enchanting vellum)
-- 📜 **Enchanting support** — scrolls and vellums are detected on the AH, so enchanting recipes are costed and valued correctly; each vellum is priced at the cheaper of buying or crafting it (e.g. on an Inscription alt)
+- 🔎 **Search bar** — a filter at the top of the window matches recipe names, or the name of any material the recipe uses (including crafting chains and the vellum the enchant needs)
+- 📜 **Enchanting support** — every enchant is matched to the vellum it actually needs — Armor or Weapon, tier I/II/III — which is then priced at the cheapest of buying it, crafting it (e.g. on an Inscription alt) or a vendor; scrolls of the enchant found on the AH provide the sell price (see [Enchanting & vellums](#enchanting--vellums))
 - 🎯 **Missing price lookups** — a *Find Unknown Prices* action performs targeted AH searches for anything you haven't priced yet
 - 🔄 **Refresh button** — re-pull every price straight from the active source (Auctionator's database or the own scan data) and rebuild the list instantly, no rescan needed
 - 🎨 **ElvUI skin** — the window is automatically skinned when [ElvUI](https://github.com/tukui-org/ElvUI) is enabled, plain Blizzard UI otherwise
@@ -77,7 +77,7 @@ Click any column header to sort by it (click again to reverse). Rows with unknow
 
 ### Search bar
 
-A filter box at the top of the window matches recipes against the **recipe name** and the names of **every material shown in the row tooltip** — including the cheaper crafting sources of those materials, and the enchanting vellum (searching `vellum` lists all enchanting recipes). Matching is case-insensitive; while a filter is active, the status bar shows *N of M recipes shown*. Escape clears the text (a second press releases focus), and column sorting applies to the filtered list.
+A filter box at the top of the window matches recipes against the **recipe name** and the names of **every material shown in the row tooltip** — including the cheaper crafting sources of those materials and the vellum the enchant needs (searching `vellum` lists all enchanting recipes; searching a specific vellum such as `Armor Vellum III` finds the enchants priced with it). Matching is case-insensitive; while a filter is active, the status bar shows *N of M recipes shown*. Escape clears the text (a second press releases focus), and column sorting applies to the filtered list.
 
 ### Refresh prices
 
@@ -91,15 +91,15 @@ The **Scan AH** and **Find Unknown Prices** buttons are hidden while [Auctionato
 
 ### Find Unknown Prices
 
-**Find Unknown Prices** collects everything without a usable price — materials at any crafting depth, crafted products, enchant scrolls and vellums — then performs a targeted AH search for each of them (up to 3 pages per search). Items checked in the last 10 minutes are skipped within the same session to avoid spamming queries, and items already priced by Auctionator count as known.
+**Find Unknown Prices** collects everything without a usable price — materials at any crafting depth, crafted products, enchant scrolls and the vellums the enchants need — then performs a targeted AH search for each of them (up to 3 pages per search). Items checked in the last 10 minutes are skipped within the same session to avoid spamming queries, and items already priced by Auctionator count as known.
 
 ### Auctionator mode
 
 On first install, GreedyGoblin checks whether Auctionator is loaded, stores the decision, and informs you in the chat window which price source is active. From then on the stored choice is used (toggle it anytime with `/gg auctionator on|off`). While the mode is on:
 
-- every market price — materials, crafted products, enchant scrolls and the enchanting vellum — comes from Auctionator's database
+- every market price — materials, crafted products, enchant scrolls and the vellums enchants need — comes from Auctionator's database
 - no **Scan AH**, **Find Unknown Prices** or **Clear Database** buttons — the whole own-scan machinery is off (**Refresh Prices** stays, since it only reads Auctionator's database)
-- all previously scanned AH data (prices, scroll and vellum registries) is cleared automatically
+- all previously scanned AH data (prices and the scroll registry) is cleared automatically
 
 > [!NOTE]
 > Vendor and crafting costs still apply: Auctionator replaces only the addon's own auction house scanning.
@@ -115,14 +115,25 @@ With **alt crafting** on (the default), recipes learned on any other character o
 
 Toggle with `/gg alts off` (only the recipes of the current character are used) and back with `/gg alts on`. `/gg alts` without an argument lists every character of the current realm together with the recipes it has learned. Recipes are stored per character (see [Data storage](#data-storage)): open each profession window on an alt once to make its recipes available to the rest.
 
-The same applies to the enchanting vellum: when an alt — e.g. an Inscriber — has learned to craft one, every vellum is priced at the cheaper of buying it on the AH or crafting it, and the tooltip shows the chosen vellum with its source and, when crafted, its materials.
+Alt crafting also feeds the vellum cost of enchants: when an alt — e.g. an Inscriber — can craft one of the vellums, it competes with the market price. The full vellum rules are described under [Enchanting & vellums](#enchanting--vellums).
+
+### Enchanting & vellums
+
+Enchanting recipes produce no item of their own — their product is the enchant put on a parchment, sold on the auction house as a scroll (`Scroll of Enchant ...`). GreedyGoblin looks the scroll up on the AH for the sell price and charges the vellum the enchant needs as part of the material cost:
+
+- **Matching vellum** — every enchant is matched to the vellum that can hold it: an *Armor* or *Weapon* vellum of tier I, II or III, decided by the enchant's level restriction (no restriction → tier I, item level 35 or lower → II, item level 60 or lower → III). The level is read from the Enchanting window while recipes are learned; recipes stored by older versions fall back to a guess from the enchant's materials — reopen the Enchanting window once to record the exact level.
+- **Cheapest source** — the vellum is priced at the cheapest of a vendor price, the market price (own AH scan or [Auctionator](#auctionator-mode)), or crafting it yourself or on an alt (see [Alt crafting](#alt-crafting)).
+- **Higher tier substitutes** — a higher tier can hold every enchant of a lower one, so when it is cheaper it is used instead; the tooltip notes this, e.g. `needs Armor Vellum II, the higher tier is cheaper`.
+- **Ring enchants** — ring enchants cannot be put on a vellum at all: they are enchanter-only, so no vellum and no scroll is involved, and the tooltip says so.
+
+Run `/gg vellum` to print the current price and cheapest source of all six vellums (Armor and Weapon, tiers I–III).
 
 ### Row tooltip
 
-Hovering a recipe row opens a tooltip with the complete breakdown: every material with its quantity, its cheapest source (vendor, AH, auctionator, or `craft: Profession` — with the alt's name appended when the recipe belongs to another character — for materials you or your alts can make), the vellum cost for enchants (see [Alt crafting](#alt-crafting)), the AH cut and the final profit.
+Hovering a recipe row opens a tooltip with the complete breakdown: every material with its quantity, its cheapest source (vendor, AH, auctionator, or `craft: Profession` — with the alt's name appended when the recipe belongs to another character — for materials you or your alts can make), for enchants the vellum it needs with its cost and source (see [Enchanting & vellums](#enchanting--vellums)), the AH cut and the final profit.
 
 > [!IMPORTANT]
-> Enchanting recipes have no crafted product: the addon prices scrolls of the enchant found on the AH and includes the priciest vellum in the material cost — every vellum is priced at the cheaper of buying it on the AH or crafting it (see [Alt crafting](#alt-crafting)).
+> Enchanting recipes have no crafted product: the addon prices scrolls of the enchant found on the AH and adds the cheapest vellum that can hold the enchant to the material cost (see [Enchanting & vellums](#enchanting--vellums)).
 
 ## Slash commands
 
@@ -132,6 +143,7 @@ Hovering a recipe row opens a tooltip with the complete breakdown: every materia
 | `/gg scan` | Start a full auction house scan |
 | `/gg unknown` | Look up prices for unknown items |
 | `/gg refresh` | Re-read all prices from the active source (Auctionator or the own AH scan) and rebuild the list |
+| `/gg vellum` | Print the current price and cheapest source of every enchanting vellum |
 | `/gg auctionator on\|off` | Toggle Auctionator mode (decided automatically at first install) |
 | `/gg alts on\|off` | Toggle [alt crafting](#alt-crafting) (on by default); without an argument, list the recipes every character of the current realm has learned |
 | `/gg cut <percent>` | Set the AH cut (5 for faction AH, 15 for neutral AH) |
@@ -144,7 +156,7 @@ For each recipe the addon computes the cheapest realistic way to obtain every re
 
 1. Each material is priced at the **cheapest** of these sources: a vendor you've met, your own AH scan, [Auctionator](https://github.com/TheMouseNest/Auctionator)'s database (the sole market source in [Auctionator mode](#auctionator-mode)), or crafting it with a recipe known on this or any other character of the realm (see [Alt crafting](#alt-crafting)).
 2. Crafted material costs are resolved **recursively**, up to 4 levels deep, with cycle protection — so e.g. *Saronite Ore → Smelted Bar → Crafted Item* chains are all explored and the best option wins.
-3. The material cost is the sum of the reagent costs. The sell price is the lowest AH buyout of the product (times the average craft yield), minus the AH cut — falling back to Auctionator, then the vendor sell price, when the AH price is unknown.
+3. The material cost is the sum of the reagent costs — for enchanting recipes it also includes the vellum the enchant needs (see [Enchanting & vellums](#enchanting--vellums)). The sell price is the lowest AH buyout of the product (times the average craft yield), minus the AH cut — falling back to Auctionator, then the vendor sell price, when the AH price is unknown.
 4. **Profit = sell price − material cost**, and the margin is the profit relative to the sell price.
 
 Vendor prices are picked up automatically whenever you browse a merchant that sells materials you use.
@@ -156,7 +168,7 @@ Everything is kept in the `GreedyGoblinDB` saved variable:
 - **AH prices** — per realm: lowest unit buyout per item, plus scan timestamp and item count (always empty in Auctionator mode)
 - **Recipes** — per character: every recipe learned from your profession windows; with [alt crafting](#alt-crafting) on, they also serve as craft sources for the other characters of the same realm
 - **Vendor prices** — per item, the lowest unit price seen at any merchant
-- **Scrolls & vellums** — item IDs catalogued from AH scans, used for enchanting
+- **Scrolls** — scroll name → item ID, catalogued from AH scans, used to price the enchant products; the vellums need no storage: their item IDs ship with the addon
 - **AH cut** — your configured auction house cut (default 5%)
 - **Alt crafting** — on or off (on by default), a single toggle shared by all of your characters
 - **Auctionator mode** — on or off, decided automatically at first install based on whether Auctionator is detected

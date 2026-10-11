@@ -6,6 +6,8 @@
 -- * top search bar: filter the list by recipe name or material names
 -- * Refresh Prices button (/gg refresh): re-pull the list with fresh prices
 --   from Auctionator or the own AH database, without rescanning
+-- * alt crafting: a material can also be crafted by any other character of the
+--   realm whose recipes were learned (/gg alts on|off, on by default)
 -- * one window, one tooltip (cost / sell price / profit), no other hooks
 ------------------------------------------------------------------------
 local GG = {}
@@ -71,6 +73,10 @@ local function AHPrice(id)
 	local d = AHData()
 	return d and d.p[id]
 end
+
+-- Alt crafting (on by default, /gg alts on|off): recipes learned on your other
+-- characters of this realm count as ways to craft a material yourself.
+local function AltsEnabled() return db.useAlts ~= false end
 
 ------------------------------------------------------------------------
 -- Auctionator (optional): its price database, probed through either the
@@ -192,26 +198,40 @@ end
 ------------------------------------------------------------------------
 local MAX_DEPTH = 4
 local memo, byProduct = {}, {}
-local vellumPrice -- most expensive vellum on the AH (nil if none seen)
+local ownerOf = {}      -- [recipe] = alt's name, only for recipes of OTHER characters
+local vellumPrice       -- price of the priciest vellum (cheapest source for each), nil if none known
+local vellumNode        -- the costing node behind vellumPrice when it is craftable (nil = plain AH price)
+
+-- Character keys whose recipes may be used: this character first (so it wins
+-- ties), then, if enabled, every other character stored for this realm.
+local function CrafterKeys()
+	local me = CharKey()
+	local keys = { me }
+	if AltsEnabled() then
+		local prefix = GetRealmName() .. "-"
+		local alts = {}
+		for key in pairs(db.recipes) do
+			if key ~= me and key:sub(1, #prefix) == prefix then alts[#alts + 1] = key end
+		end
+		table.sort(alts)
+		for _, k in ipairs(alts) do keys[#keys + 1] = k end
+	end
+	return keys
+end
 
 local function BuildIndex()
-	byProduct, memo, vellumPrice = {}, {}, nil
-	if AuctionatorMode() then
-		for _, nm in ipairs(VELLUM_NAMES) do
-			local p = AuctionatorPrice(nil, nm)
-			if p and (not vellumPrice or p > vellumPrice) then vellumPrice = p end
-		end
-	else
-		for id in pairs(db.vellums) do
-			local p = AHPrice(id) or AuctionatorPrice(id)
-			if p and (not vellumPrice or p > vellumPrice) then vellumPrice = p end
-		end
-	end
-	for _, list in pairs(db.recipes[CharKey()] or {}) do
-		for _, r in ipairs(list) do
-			if r.product then
-				byProduct[r.product] = byProduct[r.product] or {}
-				table.insert(byProduct[r.product], r)
+	byProduct, memo, ownerOf, vellumPrice, vellumNode = {}, {}, {}, nil, nil
+	local me = CharKey()
+	local prefix = GetRealmName() .. "-"
+	for _, key in ipairs(CrafterKeys()) do
+		local who = key:sub(#prefix + 1)
+		for _, list in pairs(db.recipes[key] or {}) do
+			for _, r in ipairs(list) do
+				if r.product then
+					if key ~= me then ownerOf[r] = who end
+					byProduct[r.product] = byProduct[r.product] or {}
+					table.insert(byProduct[r.product], r)
+				end
 			end
 		end
 	end
@@ -259,6 +279,43 @@ local function Node(id, name, visiting, depth)
 	return node
 end
 
+local function IsVellumName(n)
+	return n and n:find("Vellum", 1, true) and not n:find("Ruined", 1, true)
+end
+
+-- Vellum cost for enchanting recipes: the priciest vellum, where each vellum
+-- costs the cheaper of buying it or crafting it (e.g. on an Inscription alt).
+local function ComputeVellum()
+	local best, bestNode
+	local function consider(price, node)
+		if price and (not best or price > best) then best, bestNode = price, node end
+	end
+
+	-- vellums that a known character can craft: Node() picks AH vs craft
+	local crafted = {}
+	for id, recs in pairs(byProduct) do
+		local name = recs[1].name
+		if IsVellumName(name) then
+			crafted[id], crafted[name] = true, true
+			local node = Node(id, name, {}, 1)
+			consider(node.cost, node)
+		end
+	end
+
+	-- every other vellum: plain market price
+	if AuctionatorMode() then
+		for _, nm in ipairs(VELLUM_NAMES) do
+			if not crafted[nm] then consider(AuctionatorPrice(nil, nm)) end
+		end
+	else
+		for id in pairs(db.vellums) do
+			if not crafted[id] then consider(AHPrice(id) or AuctionatorPrice(id)) end
+		end
+	end
+
+	vellumPrice, vellumNode = best, bestNode
+end
+
 local function Evaluate(r)
 	local res = { r = r, name = r.name, prof = r.prof, made = r.made, missing = {}, kids = {} }
 
@@ -271,7 +328,7 @@ local function Evaluate(r)
 		if node.cost then cost = cost + node.cost * rg.n else res.missing[#res.missing + 1] = node.name end
 	end
 	if not r.product then
-		res.enchant, res.vellum = true, vellumPrice
+		res.enchant, res.vellum, res.vellumNode = true, vellumPrice, vellumNode
 		cost = cost + (vellumPrice or 0)
 	end
 	if #res.missing == 0 then res.cost = cost end
@@ -392,6 +449,7 @@ end
 
 function GG:Compute()
 	BuildIndex()
+	ComputeVellum()
 	local res = {}
 	for _, list in pairs(db.recipes[CharKey()] or {}) do
 		for _, r in ipairs(list) do res[#res + 1] = Evaluate(r) end
@@ -743,7 +801,8 @@ local function SrcLabel(node)
 	if node.src == "vendor" then
 		return "vendor" .. (node.npc and (": " .. node.npc) or "")
 	elseif node.src == "craft" then
-		return "craft: " .. node.rec.prof
+		local who = ownerOf[node.rec]
+		return "craft: " .. node.rec.prof .. (who and (", " .. who) or "")
 	elseif node.src == "auctionator" then
 		return "auctionator"
 	end
@@ -773,7 +832,14 @@ local function ShowRowTooltip(row, res)
 	tt:AddLine(" ")
 	AddKids(tt, res.kids, 1, "")
 	if res.enchant then
-		tt:AddDoubleLine("Vellum (priciest on AH)", Money(res.vellum), 1, 1, 1, 1, 1, 1)
+		local vn = res.vellumNode
+		if vn then
+			tt:AddDoubleLine("Vellum: " .. vn.name .. " " .. (SRC_COLOR[vn.src] or "") .. "(" .. SrcLabel(vn) .. ")|r",
+				Money(res.vellum), 1, 1, 1, 1, 1, 1)
+			if vn.src == "craft" then AddKids(tt, vn.kids, 1 / vn.rec.made, "   ") end
+		else
+			tt:AddDoubleLine("Vellum (priciest on AH)", Money(res.vellum), 1, 1, 1, 1, 1, 1)
+		end
 	end
 	tt:AddLine(" ")
 	tt:AddDoubleLine("Materials cost", Money(res.cost), 1, 1, 1, 1, 1, 1)
@@ -1154,12 +1220,33 @@ SlashCmdList["GREEDYGOBLIN"] = function(msg)
 		db.cut = n
 		GG:Compute()
 		Print("AH cut set to " .. n .. "%.")
+	elseif cmd == "alts" then
+		if rest == "on" or rest == "off" then
+			db.useAlts = (rest == "on")
+			GG:Compute()
+			Print("Alt crafting " .. (db.useAlts and "on: recipes of your other characters count as a way to craft materials." or "off: only this character's recipes are used."))
+		else
+			local prefix = GetRealmName() .. "-"
+			local lines = {}
+			for key, profs in pairs(db.recipes) do
+				if key:sub(1, #prefix) == prefix then
+					local parts = {}
+					for prof, list in pairs(profs) do parts[#parts + 1] = format("%s (%d)", prof, #list) end
+					table.sort(parts)
+					lines[#lines + 1] = format("  %s: %s", key:sub(#prefix + 1), table.concat(parts, ", "))
+				end
+			end
+			table.sort(lines)
+			Print("Alt crafting is " .. (AltsEnabled() and "on" or "off") .. ". Usage: /gg alts on|off. Known recipes on this realm:")
+			for _, l in ipairs(lines) do DEFAULT_CHAT_FRAME:AddMessage(l) end
+			if #lines == 0 then DEFAULT_CHAT_FRAME:AddMessage("  none yet - open each profession window on every character once.") end
+		end
 	elseif cmd == "reset" then
 		db.recipes[CharKey()] = nil
 		GG:Compute()
 		Print("Forgot the recipes stored for this character.")
 	else
-		Print("/gg  |  /gg scan  |  /gg unknown  |  /gg refresh  |  /gg auctionator on|off  |  /gg cut <percent>  |  /gg reset  |  /gg clear")
+		Print("/gg  |  /gg scan  |  /gg unknown  |  /gg refresh  |  /gg auctionator on|off  |  /gg alts on|off  |  /gg cut <percent>  |  /gg reset  |  /gg clear")
 	end
 end
 

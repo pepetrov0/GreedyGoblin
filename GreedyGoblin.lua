@@ -63,8 +63,14 @@ local MAT_TIER = {
 ------------------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------------------
+local TAG = "|cff33ff99Greedy Goblin|r"
+local ADDON_VERSION = GetAddOnMetadata("GreedyGoblin", "Version") or "?"
+
+local function Log(msg) DEFAULT_CHAT_FRAME:AddMessage(TAG .. " " .. msg) end
+local function LogLoad(hint) Log("v" .. ADDON_VERSION .. " loaded." .. (hint and (" " .. hint) or "")) end
+
 local function Print(msg)
-	DEFAULT_CHAT_FRAME:AddMessage("|cffffd700Greedy Goblin|r: " .. msg)
+	DEFAULT_CHAT_FRAME:AddMessage(TAG .. " " .. msg)
 end
 
 local function ItemID(link)
@@ -1387,7 +1393,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		db.vendorNPC = nil -- no longer tracked: vendor prices only, no names
 		db.ah      = db.ah or {}       -- [realm] = { t = time, n = items, p = { [itemID] = lowest unit buyout } }
 		db.recipes = db.recipes or {}  -- [realm-char] = { [profession] = { recipe, ... } }
-		Print("loaded. /gg to open, /gg scan at the auction house.")
+		LogLoad("/gg to open, /gg scan at the auction house.")
 		if db.auctMode == nil then
 			-- first install: pick the price source once and tell the player
 			if AuctionatorPresent() then

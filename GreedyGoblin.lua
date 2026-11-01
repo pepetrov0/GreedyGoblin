@@ -236,6 +236,8 @@ local function LearnTradeSkill()
 	local key = CharKey()
 	db.recipes[key] = db.recipes[key] or {}
 	local old = db.recipes[key][prof]
+	-- fewer recipes than last time means a search/filter is active: keep the old list
+	if old and #list < #old then return true end
 	db.recipes[key][prof] = list
 	if not old or #old ~= #list then
 		Print(format("Learned %d %s recipes.", #list, prof))

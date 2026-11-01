@@ -15,7 +15,7 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 ## Features
 
 - 🏭 **Automatic recipe learning** — open each of your profession windows once and every recipe is remembered, including reagents and average craft yield
-- 🔍 **Self-contained AH scanner** — performs its own get-all scan of the auction house and stores the lowest buyout for every item seen, per realm
+- 🔍 **Self-contained AH scanner** — performs its own get-all scan of the auction house and stores the lowest buyout of every item your recipes use, per realm
 - 🔌 **Auctionator mode** — when Auctionator is present at first install, its price database becomes the sole source of market prices: no own scanning, no AH data kept, scan buttons hidden. A chat message tells you which source is active, and the choice can be toggled anytime with `/gg auctionator on|off`
 - 🏷️ **Smart material costing** — every material is priced at the cheapest of vendor, auction house, or crafting it yourself (resolved recursively up to 4 levels deep)
 - 🧙 **Alt crafting** — recipes learned on your other characters of the realm also count as ways to craft a material yourself (`/gg alts on|off`, on by default)
@@ -44,7 +44,7 @@ A standalone crafting profit list for **World of Warcraft: Wrath of the Lich Kin
 
 1. **Learn your recipes** — open each of your profession windows once; recipes are learned automatically and stored per character.
 2. **Teach it vendor prices** — visit material vendors (thread, flux, …); browsing a merchant records its prices.
-3. **Scan the auction house** — open the AH and click **Scan AH** (or run `/gg scan`) to gather prices for everything on sale.
+3. **Scan the auction house** — open the AH and click **Scan AH** (or run `/gg scan`) to gather prices for every material, product, vellum and enchant scroll your recipes use.
 4. **Fill in the gaps** — click **Find Unknown Prices** (or `/gg unknown`) to look up items that had no price yet.
 5. Repeat step 3–4 occasionally to keep prices fresh, especially after patch days.
 
@@ -87,7 +87,7 @@ The **Refresh Prices** button in the bottom-right corner of the window (or `/gg 
 
 The **Scan AH** and **Find Unknown Prices** buttons are hidden while [Auctionator mode](#auctionator-mode) is active.
 
-**Scan AH** queries the entire auction house at once and stores the lowest buyout per unit for every item found. The result replaces the previous scan data for that realm. Scanning is chunked in the background to keep the game responsive, and it respects Blizzard's full-scan cooldown — the button stays disabled until the AH allows a new scan.
+**Scan AH** queries the entire auction house at once and stores the lowest buyout per unit of every item a recipe of any of your characters on the realm uses (reagents, products, vellums, enchant scrolls); everything else is skipped to keep memory low, so after learning new recipes run a new scan or **Find Unknown Prices**. The result replaces the previous scan data for that realm. Scanning is chunked in the background to keep the game responsive, and it respects Blizzard's full-scan cooldown — the button stays disabled until the AH allows a new scan.
 
 ### Find Unknown Prices
 
@@ -165,13 +165,15 @@ Vendor prices are picked up automatically whenever you browse a merchant that se
 
 Everything is kept in the `GreedyGoblinDB` saved variable:
 
-- **AH prices** — per realm: lowest unit buyout per item, plus scan timestamp and item count (always empty in Auctionator mode)
-- **Recipes** — per character: every recipe learned from your profession windows; with [alt crafting](#alt-crafting) on, they also serve as craft sources for the other characters of the same realm
-- **Vendor prices** — per item, the lowest unit price seen at any merchant
+- **AH prices** — per realm: lowest unit buyout of each item your recipes use, plus scan timestamp and item count (always empty in Auctionator mode)
+- **Recipes** — per character: every recipe learned from your profession windows, in a compact form (reagent IDs and counts, with each reagent name stored once in a shared item-name table); with [alt crafting](#alt-crafting) on, they also serve as craft sources for the other characters of the same realm
+- **Vendor prices** — per item, the unit price seen at a merchant, only for items your recipes use
 - **Scrolls** — scroll name → item ID, catalogued from AH scans, used to price the enchant products; the vellums need no storage: their item IDs ship with the addon
 - **AH cut** — your configured auction house cut (default 5%)
 - **Alt crafting** — on or off (on by default), a single toggle shared by all of your characters
 - **Auctionator mode** — on or off, decided automatically at first install based on whether Auctionator is detected
+
+Everything computed for the window (costs, the list, search and layout caches) is dropped when the window closes, so a closed window only keeps the saved data in memory.
 
 > [!NOTE]
 > Auctionator prices are read live from Auctionator's own database and are never stored in `GreedyGoblinDB`.

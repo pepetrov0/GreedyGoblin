@@ -16,12 +16,21 @@
 local GG = {}
 GreedyGoblin = GG
 
-local floor, format, min = math.floor, string.format, math.min
+local floor, format, min, max = math.floor, string.format, math.min, math.max
+local pairs, ipairs, select = pairs, ipairs, select
+local wipe = wipe or table.wipe
 local db
+local EMPTY = {} -- shared read-only empty table (never write to it)
 
 local PER_PAGE  = NUM_AUCTION_ITEMS_PER_PAGE or 50
 local CHUNK     = 500     -- auctions processed per frame after a get-all scan
-local DB_VERSION = 2
+local DB_VERSION = 3
+
+-- Stored recipe format (compact, ~4x smaller than v2):
+--   { id1, n1, id2, n2, ...,  name = spell name, prof = profession,
+--     product = item id (nil for enchants), made = avg yield (nil = 1),
+--     lvl = enchant level restriction (enchants only) }
+-- Reagent names live once per item in db.names[id].
 
 -- every WotLK enchanting vellum, so the vellum price can come straight from
 -- Auctionator when there are no own AH scans that have spotted them
@@ -78,19 +87,17 @@ local function ItemID(link)
 	return tonumber(link:match("item:(%d+)"))
 end
 
+-- one format() call, no temp table
 local function Money(c)
 	if not c then return "|cff888888?|r" end
-	local neg = c < 0
-	if neg then c = -c end
+	local neg = ""
+	if c < 0 then neg, c = "|cffff4040-|r", -c end
 	c = floor(c + 0.5)
 	local g, s, cc = floor(c / 10000), floor((c % 10000) / 100), c % 100
-	local t = {}
-	if g > 0 then t[#t + 1] = format("|cffffd700%dg|r", g) end
-	if g > 0 or s > 0 then t[#t + 1] = format("|cffc7c7cf%ds|r", s) end
-	if g < 100 then t[#t + 1] = format("|cffeda55f%dc|r", cc) end
-	local out = table.concat(t, " ")
-	if neg then out = "|cffff4040-|r" .. out end
-	return out
+	if g >= 100 then return format("%s|cffffd700%dg|r |cffc7c7cf%ds|r", neg, g, s) end
+	if g > 0 then return format("%s|cffffd700%dg|r |cffc7c7cf%ds|r |cffeda55f%dc|r", neg, g, s, cc) end
+	if s > 0 then return format("%s|cffc7c7cf%ds|r |cffeda55f%dc|r", neg, s, cc) end
+	return format("%s|cffeda55f%dc|r", neg, cc)
 end
 
 local function Age(sec)
@@ -164,9 +171,49 @@ local function AuctionatorMode()
 end
 
 local function ClearAHData()
-	local had = (next(db.ah) or next(db.scrolls) or next(db.vellums)) ~= nil
-	db.ah, db.scrolls, db.vellums = {}, {}, {}
+	local had = (next(db.ah) or next(db.scrolls)) ~= nil
+	db.ah, db.scrolls = {}, {}
 	return had
+end
+
+local enchName
+local function EnchantingName()
+	if not enchName then enchName = (GetSpellInfo and GetSpellInfo(7411)) or "Enchanting" end
+	return enchName
+end
+
+local scrollName = {} -- [enchant name] = "Scroll of <name>", so it is not re-concatenated
+local function ScrollOf(name)
+	local s = scrollName[name]
+	if not s then s = "Scroll of " .. name; scrollName[name] = s end
+	return s
+end
+
+-- Item ids (reagents, products, vellums) and enchant scroll names used by the
+-- recipes of every character on `realm` (nil = all realms). Only these items
+-- are worth storing prices for.
+local function RelevantItems(realm)
+	local ids, scrolls = {}, {}
+	local prefix = realm and (realm .. "-")
+	local ench = EnchantingName()
+	for key, profs in pairs(db.recipes) do
+		if not prefix or key:sub(1, #prefix) == prefix then
+			for _, list in pairs(profs) do
+				for _, r in ipairs(list) do
+					if r.product then
+						ids[r.product] = true
+					elseif r.prof == ench then
+						scrolls[ScrollOf(r.name)], scrolls[r.name] = true, true
+					end
+					for i = 1, #r, 2 do ids[r[i]] = true end
+				end
+			end
+		end
+	end
+	for _, list in pairs(VELLUM_ID) do
+		for _, id in ipairs(list) do ids[id] = true end
+	end
+	return ids, scrolls
 end
 
 ------------------------------------------------------------------------
@@ -192,6 +239,7 @@ local function LearnTradeSkill()
 	end
 	n = GetNumTradeSkills()
 
+	local names = db.names
 	local list = {}
 	for i = 1, n do
 		local name, typ = GetTradeSkillInfo(i)
@@ -205,25 +253,28 @@ local function LearnTradeSkill()
 			local made = (minMade + (maxMade or minMade)) / 2
 			if made < 1 then made = 1 end
 
-			local reagents, ok = {}, true
+			local r, ok = {}, true
 			for j = 1, GetTradeSkillNumReagents(i) do
 				local rname, _, rcount = GetTradeSkillReagentInfo(i, j)
 				local rid = ItemID(GetTradeSkillReagentItemLink(i, j))
 				if rid and rcount then
-					reagents[#reagents + 1] = { id = rid, n = rcount, name = rname }
+					r[#r + 1] = rid
+					r[#r + 1] = rcount
+					if rname and names[rid] ~= rname then names[rid] = rname end
 				else
 					ok = false
 				end
 			end
-			-- enchants: the level restriction in the description ("Requires a level
-			-- 60 or higher item", none = no restriction) decides the vellum tier
-			local lvl
-			if not product and GetTradeSkillDescription then
-				local desc = GetTradeSkillDescription(i)
-				if desc and desc ~= "" then lvl = tonumber(desc:match("[Ll]evel (%d+)")) or 0 end
-			end
-			if ok and #reagents > 0 then
-				list[#list + 1] = { name = name, prof = prof, product = product, made = made, reagents = reagents, lvl = lvl }
+			if ok and #r > 0 then
+				r.name, r.prof, r.product = name, prof, product
+				if made ~= 1 then r.made = made end
+				-- enchants: the level restriction in the description ("Requires a level
+				-- 60 or higher item", none = no restriction) decides the vellum tier
+				if not product and GetTradeSkillDescription then
+					local desc = GetTradeSkillDescription(i)
+					if desc and desc ~= "" then r.lvl = tonumber(desc:match("[Ll]evel (%d+)")) or 0 end
+				end
+				list[#list + 1] = r
 			end
 		end
 	end
@@ -250,9 +301,14 @@ end
 -- yourself (recursively) with a recipe you know.
 ------------------------------------------------------------------------
 local MAX_DEPTH = 4
-local memo, byProduct = {}, {}
+local memo = {}
+-- [item id] = the recipe making it, or a list of recipes when several differ.
+-- The same recipe known by several characters is kept once (the first key in
+-- CrafterKeys order, so this character wins).
+local byProduct = {}
 local ownerOf = {}      -- [recipe] = alt's name, only for recipes of OTHER characters
-local vellumCache = {}  -- [vellum name] = { cost, node } or false (no price known), valid until the next BuildIndex
+local vellumCache = {}  -- [vellum id] = node or false (no price known), valid until the next BuildIndex
+local ahP = EMPTY       -- this realm's AH price table, captured by BuildIndex
 
 -- Character keys whose recipes may be used: this character first (so it wins
 -- ties), then, if enabled, every other character stored for this realm.
@@ -273,56 +329,87 @@ end
 
 local function BuildIndex()
 	byProduct, memo, ownerOf, vellumCache = {}, {}, {}, {}
+	local d = AHData()
+	ahP = d and d.p or EMPTY
 	local me = CharKey()
 	local prefix = GetRealmName() .. "-"
 	for _, key in ipairs(CrafterKeys()) do
 		local who = key:sub(#prefix + 1)
-		for _, list in pairs(db.recipes[key] or {}) do
+		for _, list in pairs(db.recipes[key] or EMPTY) do
 			for _, r in ipairs(list) do
-				if r.product then
-					if key ~= me then ownerOf[r] = who end
-					byProduct[r.product] = byProduct[r.product] or {}
-					table.insert(byProduct[r.product], r)
+				local p = r.product
+				if p then
+					local cur, add = byProduct[p], true
+					if not cur then
+						byProduct[p] = r
+					elseif cur.name then -- a single recipe so far
+						if cur.name == r.name then add = false else byProduct[p] = { cur, r } end
+					else
+						for i = 1, #cur do
+							if cur[i].name == r.name then add = false break end
+						end
+						if add then cur[#cur + 1] = r end
+					end
+					if add and key ~= me then ownerOf[r] = who end
 				end
 			end
 		end
 	end
 end
 
+local Node
+
+-- Unit cost of crafting with recipe r, or nil when a reagent has no price.
+-- Every reagent is evaluated even after one is unpriced, so all of them land
+-- in memo (Find Unknown Prices looks there).
+local function CraftUnit(r, visiting, depth)
+	local sum = 0
+	for i = 1, #r, 2 do
+		local kn = Node(r[i], nil, visiting, depth)
+		if sum and kn.cost then sum = sum + kn.cost * r[i + 1] else sum = nil end
+	end
+	return sum and sum / (r.made or 1)
+end
+
 -- Cheapest way to get ONE unit of an item: vendor, AH, or craft it.
-local function Node(id, name, visiting, depth)
-	if memo[id] then return memo[id] end
-	local node = { id = id, name = name or GetItemInfo(id) or ("item " .. id) }
+-- node = { name, cost, src, rec, kids }; kids[i] is the node of rec's i-th
+-- reagent (count rec[2 * i]), only set when crafting is the cheapest source.
+function Node(id, name, visiting, depth)
+	local node = memo[id]
+	if node then return node end
+	name = name or db.names[id] or GetItemInfo(id) or ("item " .. id)
 
-	local v = db.vendor[id]
-	if v then node.cost, node.src = v, "vendor" end
+	local cost, src = db.vendor[id], nil
+	if cost then src = "vendor" end
 
-	local ah = AHPrice(id)
-	if ah and (not node.cost or ah < node.cost) then node.cost, node.src = ah, "AH" end
+	local ah = ahP[id]
+	if ah and (not cost or ah < cost) then cost, src = ah, "AH" end
 
 	local ap = AuctionatorPrice(id, name)
-	if ap and (not node.cost or ap < node.cost) then node.cost, node.src = ap, "auctionator" end
+	if ap and (not cost or ap < cost) then cost, src = ap, "auctionator" end
 
+	local rec, kids
 	local recs = byProduct[id]
 	if recs and depth <= MAX_DEPTH and not visiting[id] then
 		visiting[id] = true
-		for _, r in ipairs(recs) do
-			local sum, ok, kids = 0, true, {}
-			for _, rg in ipairs(r.reagents) do
-				local kn = Node(rg.id, rg.name, visiting, depth + 1)
-				kids[#kids + 1] = { n = rg.n, node = kn }
-				if kn.cost then sum = sum + kn.cost * rg.n else ok = false end
-			end
-			if ok then
-				local unit = sum / r.made
-				if not node.cost or unit < node.cost then
-					node.cost, node.src, node.rec, node.kids = unit, "craft", r, kids
-				end
+		if recs.name then
+			local unit = CraftUnit(recs, visiting, depth + 1)
+			if unit and (not cost or unit < cost) then cost, src, rec = unit, "craft", recs end
+		else
+			for ri = 1, #recs do
+				local unit = CraftUnit(recs[ri], visiting, depth + 1)
+				if unit and (not cost or unit < cost) then cost, src, rec = unit, "craft", recs[ri] end
 			end
 		end
 		visiting[id] = nil
+		if rec then
+			-- only the winning recipe keeps its children (all already memoized)
+			kids = {}
+			for i = 1, #rec, 2 do kids[#kids + 1] = memo[rec[i]] end
+		end
 	end
 
+	node = { name = name, cost = cost, src = src, rec = rec, kids = kids }
 	memo[id] = node
 	return node
 end
@@ -330,28 +417,24 @@ end
 ------------------------------------------------------------------------
 -- Vellums: which one an enchant needs, and what it costs
 ------------------------------------------------------------------------
-local function EnchantingName()
-	return (GetSpellInfo and GetSpellInfo(7411)) or "Enchanting"
-end
 
 -- Cheapest way to get one vellum (by item id): vendor, AH, Auctionator or
--- crafting it (e.g. on an Inscription alt). Returns { cost =, node =, id = } or nil.
+-- crafting it (e.g. on an Inscription alt). Returns its node or nil.
 local function VellumOption(kind, tier)
 	local id = VELLUM_ID[kind][tier]
 	local c = vellumCache[id]
 	if c ~= nil then return c or nil end
 	local node = Node(id, VellumName(kind, tier), {}, 1)
-	local opt = node.cost and { cost = node.cost, node = node, id = id } or false
-	vellumCache[id] = opt
-	return opt or nil
+	vellumCache[id] = node.cost and node or false
+	return node.cost and node or nil
 end
 
 -- Cheapest vellum that can hold an enchant of `tier` (a higher tier works too).
 local function BestVellum(kind, tier)
 	local best
 	for t = tier, 3 do
-		local opt = VellumOption(kind, t)
-		if opt and (not best or opt.cost < best.cost) then best = opt end
+		local node = VellumOption(kind, t)
+		if node and (not best or node.cost < best.cost) then best = node end
 	end
 	return best
 end
@@ -365,135 +448,156 @@ local function EnchantVellumReq(r)
 	local kind = (name:find("Weapon", 1, true) or name:find("Staff", 1, true)) and "Weapon" or "Armor"
 	if r.lvl then return kind, TierForLevel(r.lvl), false end
 	local tier = 1
-	for _, rg in ipairs(r.reagents) do
-		local t = MAT_TIER[rg.id]
+	for i = 1, #r, 2 do
+		local t = MAT_TIER[r[i]]
 		if t and t > tier then tier = t end
 	end
 	return kind, tier, true
 end
 
-local function Evaluate(r)
-	local res = { r = r, name = r.name, prof = r.prof, made = r.made, missing = {}, kids = {} }
-
-	local visiting = {}
-	if r.product then visiting[r.product] = true end
-	local cost = 0
-	for _, rg in ipairs(r.reagents) do
-		local node = Node(rg.id, rg.name, visiting, 1)
-		res.kids[#res.kids + 1] = { n = rg.n, node = node }
-		if node.cost then cost = cost + node.cost * rg.n else res.missing[#res.missing + 1] = node.name end
+-- enchant product = the scroll (enchant put on a vellum), looked up by name
+local function ScrollPrice(name)
+	local sn = ScrollOf(name)
+	local id = db.scrolls[sn]
+	local p = id and ahP[id]
+	if not p then
+		id = db.scrolls[name]
+		p = id and ahP[id]
 	end
-	local isEnchant = not r.product and r.prof == EnchantingName()
-	if isEnchant then
-		res.enchant = true
+	if p then return p, false end
+	p = AuctionatorPrice(nil, sn) or AuctionatorPrice(nil, name)
+	if p then return p, true end
+end
+
+local evalVisiting = {} -- reused; Node leaves it as it found it
+
+-- res = { r, kids, v, cost, sell, sellSrc, profit, margin } (8 fields = one
+-- small hash). v: nil = not an enchant, false = ring enchant (no vellum),
+-- else { kind, tier, need, guess, node }.
+local function Evaluate(r)
+	local kids, cost, missing = {}, 0, false
+	local product = r.product
+	if product then evalVisiting[product] = true end
+	for i = 1, #r, 2 do
+		local node = Node(r[i], nil, evalVisiting, 1)
+		kids[#kids + 1] = node
+		if node.cost then cost = cost + node.cost * r[i + 1] else missing = true end
+	end
+	if product then evalVisiting[product] = nil end
+
+	local v, gross, sellSrc
+	if not product and r.prof == EnchantingName() then
 		local kind, tier, guessed = EnchantVellumReq(r)
 		if kind then
-			res.vellumKind, res.vellumTier, res.vellumNeed = kind, tier, VellumName(kind, tier)
-			res.enchLevel, res.vellumGuess = r.lvl, guessed
-			local opt = BestVellum(kind, tier)
-			if opt then
-				res.vellum, res.vellumNode = opt.cost, opt.node
-				cost = cost + opt.cost
-			else
-				res.missing[#res.missing + 1] = res.vellumNeed
-			end
+			local vn = BestVellum(kind, tier)
+			v = { kind = kind, tier = tier, need = VellumName(kind, tier), guess = guessed, node = vn }
+			if vn then cost = cost + vn.cost else missing = true end
+			local p, auc = ScrollPrice(r.name)
+			if p then gross, sellSrc = p, auc and "scroll, auctionator" or "scroll, AH" end
 		else
-			res.noScroll = true -- ring enchants: enchanter only, no vellum, no scroll
+			v = false -- ring enchants: enchanter only, no vellum, no scroll
 		end
-	end
-	if #res.missing == 0 then res.cost = cost end
-
-	if isEnchant and not res.noScroll then
-		-- enchant: the product is the scroll (enchant put on a vellum), found by name
-		local p
-		for _, nm in ipairs({ "Scroll of " .. r.name, r.name }) do
-			local id = db.scrolls[nm]
-			p = id and AHPrice(id)
-			if p then break end
-		end
-		if not p then
-			for _, nm in ipairs({ "Scroll of " .. r.name, r.name }) do
-				p = AuctionatorPrice(nil, nm)
-				if p then
-					res.auc = true
-					break
-				end
-			end
-		end
+	elseif product then
+		local made = r.made or 1
+		local p, s = ahP[product], "AH"
+		if not p then p, s = AuctionatorPrice(product), "auctionator" end
 		if p then
-			res.gross, res.scroll = p, true
-			res.sell = p * (1 - db.cut / 100)
-		end
-	elseif r.product then
-		local p = AHPrice(r.product)
-		if not p then
-			p = AuctionatorPrice(r.product)
-			if p then res.auc = true end
-		end
-		if p then
-			res.gross = p * r.made
-			res.sell = res.gross * (1 - db.cut / 100)
+			gross, sellSrc = p * made, s
 		else
-			local vs = select(11, GetItemInfo(r.product))
-			if vs and vs > 0 then
-				res.gross, res.sell, res.vendorSell = vs * r.made, vs * r.made, true
-			end
+			local vs = select(11, GetItemInfo(product))
+			if vs and vs > 0 then gross, sellSrc = vs * made, "vendor" end
 		end
 	end
 
-	if res.cost and res.sell then
-		res.profit = res.sell - res.cost
-		if res.sell > 0 then res.margin = res.profit / res.sell * 100 end
+	if missing then cost = nil end
+	local sell, profit, margin
+	if gross then sell = (sellSrc == "vendor") and gross or gross * (1 - db.cut / 100) end
+	if cost and sell then
+		profit = sell - cost
+		if sell > 0 then margin = profit / sell * 100 end
 	end
-	return res
+	return { r = r, kids = kids, v = v, cost = cost, sell = sell, sellSrc = sellSrc, profit = profit, margin = margin }
+end
+
+-- price before the AH cut (shown in the tooltip)
+local function Gross(res)
+	if not res.sell or res.sellSrc == "vendor" then return res.sell end
+	return res.sell / (1 - db.cut / 100)
 end
 
 GG.sortKey, GG.sortDesc = "profit", true
 
+local sortKey, sortDesc, sortOnRecipe
+local function SortCmp(a, b)
+	local x, y
+	if sortOnRecipe then x, y = a.r[sortKey], b.r[sortKey] else x, y = a[sortKey], b[sortKey] end
+	if x == y then return a.r.name < b.r.name end
+	if x == nil then return false end   -- unpriced always last
+	if y == nil then return true end
+	if sortDesc then return x > y end
+	return x < y
+end
+
 local function SortResults()
-	local key, desc = GG.sortKey, GG.sortDesc
-	table.sort(GG.results, function(a, b)
-		local x, y = a[key], b[key]
-		if x == y then return a.name < b.name end
-		if x == nil then return false end   -- unpriced always last
-		if y == nil then return true end
-		if desc then return x > y end
-		return x < y
-	end)
+	sortKey, sortDesc = GG.sortKey, GG.sortDesc
+	sortOnRecipe = (sortKey == "name" or sortKey == "prof")
+	table.sort(GG.results, SortCmp)
 end
 
 ------------------------------------------------------------------------
 -- Optional search bar: filters the list by recipe name and by the names
 -- of any material the recipe uses (as shown in the row tooltip).
 ------------------------------------------------------------------------
-local function KidsMatch(kids, text)
-	for _, k in ipairs(kids or {}) do
-		local node = k.node
-		if node then
-			if node.name and node.name:lower():find(text, 1, true) then return true end
-			if node.kids and KidsMatch(node.kids, text) then return true end
+-- lower-cased names, kept while the window is open so typing makes no garbage
+local LOWER_MT = { __index = function(t, s)
+	local l = s:lower()
+	t[s] = l
+	return l
+end }
+local lowerCache = setmetatable({}, LOWER_MT)
+local matchMemo = {} -- [node] = matches the current search text (nodes are shared by many recipes)
+local viewBuf = {}
+
+local function NodeMatches(node, text)
+	local m = matchMemo[node]
+	if m ~= nil then return m end
+	matchMemo[node] = false -- guards against cycles
+	m = lowerCache[node.name]:find(text, 1, true) ~= nil
+	local kids = node.kids
+	if not m and kids then
+		for i = 1, #kids do
+			if NodeMatches(kids[i], text) then m = true break end
 		end
 	end
-	return false
+	matchMemo[node] = m
+	return m
 end
 
 local function ApplyFilter()
+	local results = GG.results or EMPTY
 	local text = GG.search
 	if not text or text == "" then
-		GG.view = GG.results or {}
+		GG.view = results
 		return
 	end
-	local view = {}
-	for _, res in ipairs(GG.results or {}) do
-		if (res.name and res.name:lower():find(text, 1, true))
-			or (res.vellumNeed and res.vellumNeed:lower():find(text, 1, true))
-			or (res.vellumNode and res.vellumNode.name and res.vellumNode.name:lower():find(text, 1, true))
-			or (res.enchant and string.find("vellum", text, 1, true))
-			or KidsMatch(res.kids, text) then
-			view[#view + 1] = res
+	wipe(matchMemo)
+	wipe(viewBuf)
+	local vellumWord = ("vellum"):find(text, 1, true) ~= nil
+	for _, res in ipairs(results) do
+		local v, hit = res.v, lowerCache[res.r.name]:find(text, 1, true)
+		if not hit and v then
+			hit = vellumWord or lowerCache[v.need]:find(text, 1, true)
+				or (v.node and NodeMatches(v.node, text))
 		end
+		if not hit then
+			local kids = res.kids
+			for i = 1, #kids do
+				if NodeMatches(kids[i], text) then hit = true break end
+			end
+		end
+		if hit then viewBuf[#viewBuf + 1] = res end
 	end
-	GG.view = view
+	GG.view = viewBuf
 end
 
 function GG:RefreshList()
@@ -509,7 +613,10 @@ function GG:SetSearch(text)
 	-- start from the top when the filter changes
 	local bar = _G["GreedyGoblinScrollScrollBar"]
 	if bar then bar:SetValue(0) end
-	self:RefreshList()
+	-- the order did not change: filter only, no re-sort
+	ApplyFilter()
+	self:UpdateList()
+	self:UpdateStatus()
 end
 
 function GG:SetSearchPrompt()
@@ -521,12 +628,29 @@ end
 
 function GG:Compute()
 	BuildIndex()
-	local res = {}
-	for _, list in pairs(db.recipes[CharKey()] or {}) do
+	local res = self.results
+	if res then wipe(res) else res = {} end
+	for _, list in pairs(db.recipes[CharKey()] or EMPTY) do
 		for _, r in ipairs(list) do res[#res + 1] = Evaluate(r) end
 	end
 	self.results = res
 	self:RefreshList()
+end
+
+-- Recompute only while the window is open (it computes when opened anyway).
+function GG:Refresh()
+	if self.frame and self.frame:IsShown() then self:Compute() end
+end
+
+-- Window closed: drop every derived table so it can be garbage collected.
+-- Only the saved variables stay resident.
+function GG:Release()
+	byProduct, memo, ownerOf, vellumCache, ahP = {}, {}, {}, {}, EMPTY
+	self.results, self.view = nil, nil
+	-- fresh tables rather than wipe(): wipe keeps the allocated capacity
+	viewBuf, matchMemo, lowerCache = {}, {}, setmetatable({}, LOWER_MT)
+	scrollName = {}
+	if self.ReleaseUI then self:ReleaseUI() end
 end
 
 -- Explicit refresh (Refresh Prices button / /gg refresh): drop every cached
@@ -535,7 +659,7 @@ end
 function GG:RefreshPrices()
 	local bar = _G["GreedyGoblinScrollScrollBar"]
 	if bar then bar:SetValue(0) end -- start the fresh list from the top
-	self:Compute()
+	self:Refresh()
 	Print(AuctionatorMode() and "List rebuilt with the latest Auctionator prices."
 						or "List rebuilt from your own AH scan data.")
 end
@@ -558,18 +682,21 @@ local function FinishScan()
 	db.ah[GetRealmName()] = { t = time(), n = n, p = scan.p }
 	for name, id in pairs(scan.scrolls) do db.scrolls[name] = id end
 	scan = nil
-	Print(format("Scan complete: prices for %d different items.", n))
+	Print(format("Scan complete: prices for %d items your recipes use.", n))
 	GG:UpdateButtons()
-	GG:Compute()
+	GG:Refresh()
 end
 
--- lowest buyout per unit, keyed by item id
+-- lowest buyout per unit, keyed by item id; only items some recipe on this
+-- realm uses (reagent, product, vellum, enchant scroll) are kept
 local function AddAuction(i)
 	local name, _, count, _, _, _, _, _, buyout = GetAuctionItemInfo("list", i)
 	if buyout and buyout > 0 and count and count > 0 then
 		local id = ItemID(GetAuctionItemLink("list", i))
-		if id then
-			if name and (name:find("^Scroll of Enchant") or name:find("^Enchant ")) then
+		if not id then return end
+		local isScroll = name and scan.scrollSet[name]
+		if isScroll or scan.want[id] then
+			if isScroll then
 				scan.scrolls[name] = id -- enchant scrolls, looked up by name for enchanting recipes
 			end
 			local unit = floor(buyout / count)
@@ -601,19 +728,20 @@ local function CollectUnknown()
 		end
 	end
 
-	for _, res in ipairs(GG.results or {}) do
-		local r = res.r
+	for _, res in ipairs(GG.results or EMPTY) do
+		local r, v = res.r, res.v
 		if r.product then
 			if not AHPrice(r.product) and not AuctionatorPrice(r.product) then
-				add(r.product, { id = r.product, name = GetItemInfo(r.product) or r.name })
+				add(r.product, { id = r.product, name = GetItemInfo(r.product) or db.names[r.product] or r.name })
 			end
-		else
-			if res.enchant and not res.noScroll and not res.scroll then add("scroll:" .. r.name, { name = r.name, scroll = true }) end
+		elseif v then
+			-- enchant without a scroll price (for enchants the scroll is the only sell price)
+			if not res.sell then add("scroll:" .. r.name, { name = r.name, scroll = true }) end
 			-- the vellum this enchant needs (or a higher tier) has no price yet
-			if res.vellumKind and not res.vellum then
-				for t = res.vellumTier, 3 do
-					if not VellumOption(res.vellumKind, t) then
-						add("vellum:" .. VELLUM_ID[res.vellumKind][t], { id = VELLUM_ID[res.vellumKind][t], name = VellumName(res.vellumKind, t) })
+			if not v.node then
+				for t = v.tier, 3 do
+					if not VellumOption(v.kind, t) then
+						add("vellum:" .. VELLUM_ID[v.kind][t], { id = VELLUM_ID[v.kind][t], name = VellumName(v.kind, t) })
 					end
 				end
 			end
@@ -671,7 +799,7 @@ local function UnknownTick(now)
 			scan = nil
 			Print(format("Looked up %d item(s), found prices for %d.", total, found))
 			GG:UpdateButtons()
-			GG:Compute()
+			GG:Refresh()
 			return
 		end
 		scan.cur, scan.page, scan.prices, scan.names, scan.state = scan.queue[scan.i], 0, {}, {}, "ready"
@@ -694,6 +822,7 @@ function GG:StartUnknownScan()
 	if scan then Print("A scan is already running.") return end
 	self:Compute()
 	local list = CollectUnknown()
+	if not (self.frame and self.frame:IsShown()) then self:Release() end
 	if #list == 0 then Print("No unknown prices to look up (or they were all just checked).") return end
 	scan = { mode = "unknown", queue = list, i = 0, found = 0, state = "next" }
 	Print(format("Looking up %d unknown price(s)...", #list))
@@ -715,9 +844,9 @@ StaticPopupDialogs["GREEDYGOBLIN_CLEAR"] = {
 function GG:ClearDatabase()
 	if scan then StopScan() end
 	db.vendor, db.ah = {}, {}
-	db.recipes, db.scrolls, db.vellums = {}, {}, {}
-	for k in pairs(checked) do checked[k] = nil end
-	self:Compute()
+	db.recipes, db.scrolls, db.names = {}, {}, {}
+	wipe(checked)
+	self:Refresh()
 	self:UpdateButtons()
 	Print("Database cleared. Open your profession windows again to re-learn recipes.")
 end
@@ -731,7 +860,12 @@ function GG:StartScan()
 	if scan then Print("A scan is already running.") return end
 	local _, canAll = CanSendAuctionQuery()
 	if not canAll then Print("The full scan is on cooldown, try again later.") return end
-	scan = { mode = "all", p = {}, scrolls = {}, state = "ready", sentAt = GetTime() }
+	if not next(db.recipes) then
+		Print("No recipes known yet: open your profession windows first, the scan only keeps prices your recipes use.")
+		return
+	end
+	local want, scrollSet = RelevantItems(GetRealmName())
+	scan = { mode = "all", p = {}, scrolls = {}, want = want, scrollSet = scrollSet, state = "ready", sentAt = GetTime() }
 	Print("Scanning the whole auction house...")
 	self:UpdateButtons()
 	self:UpdateStatus()
@@ -776,24 +910,19 @@ end
 local function RecordVendor()
 	local npc = UnitName("npc")
 
-	-- ids of every material used by the recipes you know
-	local mats = {}
-	for _, list in pairs(db.recipes[CharKey()] or {}) do
-		for _, r in ipairs(list) do
-			for _, rg in ipairs(r.reagents) do mats[rg.id] = true end
-		end
-	end
+	-- only items used by a recipe of any character on this realm are stored
+	local mats = RelevantItems(GetRealmName())
 
 	local learned = {}
 	for i = 1, GetMerchantNumItems() do
 		local mname, _, price, qty, _, _, ext = GetMerchantItemInfo(i)
 		local id = ItemID(GetMerchantItemLink(i))
-		if id and price and price > 0 and not ext then
+		if id and mats[id] and price and price > 0 and not ext then
 			local unit = price / ((qty and qty > 0) and qty or 1)
-			if mats[id] and db.vendor[id] ~= unit then
+			if db.vendor[id] ~= unit then
 				learned[#learned + 1] = { name = mname or ("item " .. id), unit = unit }
+				db.vendor[id] = unit
 			end
-			db.vendor[id] = unit
 		end
 	end
 
@@ -804,7 +933,7 @@ local function RecordVendor()
 		end
 		Print(format("%s: learned %d material price%s: %s%s", npc or "Vendor", #learned,
 			#learned > 1 and "s" or "", table.concat(parts, ", "), #learned > 8 and ", ..." or ""))
-		if GG.frame and GG.frame:IsShown() then GG:Compute() end
+		GG:Refresh()
 	end
 end
 
@@ -879,15 +1008,17 @@ local function SrcLabel(node)
 	return "AH"
 end
 
-local function AddKids(tt, kids, qty, indent)
-	for _, k in ipairs(kids) do
-		local n, node = k.n * qty, k.node
+-- kids[i] is the node of rec's i-th reagent; rec[2 * i] is its count
+local function AddKids(tt, rec, kids, qty, indent, depth)
+	for i = 1, #kids do
+		local node = kids[i]
+		local n = rec[2 * i] * qty
 		local label = indent .. Qty(n) .. " x " .. node.name
 		if node.cost then
 			tt:AddDoubleLine(label .. " " .. (SRC_COLOR[node.src] or "") .. "(" .. SrcLabel(node) .. ")|r",
 				Money(node.cost * n), 1, 1, 1, 1, 1, 1)
-			if node.src == "craft" then
-				AddKids(tt, node.kids, n / node.rec.made, indent .. "   ")
+			if node.src == "craft" and depth < 8 then
+				AddKids(tt, node.rec, node.kids, n / (node.rec.made or 1), indent .. "   ", depth + 1)
 			end
 		else
 			tt:AddDoubleLine(label, "|cffff4040no price|r", 1, 1, 1, 1, 1, 1)
@@ -897,42 +1028,40 @@ end
 
 local function ShowRowTooltip(row, res)
 	local tt = GameTooltip
+	local r, v = res.r, res.v
+	local made = r.made or 1
 	tt:SetOwner(row, "ANCHOR_RIGHT")
-	tt:AddLine(res.name .. (res.made > 1 and (" x" .. Qty(res.made)) or ""), 1, 0.82, 0)
+	tt:AddLine(r.name .. (made > 1 and (" x" .. Qty(made)) or ""), 1, 0.82, 0)
 	tt:AddLine(" ")
-	AddKids(tt, res.kids, 1, "")
-	if res.noScroll then
+	AddKids(tt, r, res.kids, 1, "", 1)
+	if v == false then
 		tt:AddLine("Ring enchant: enchanter only, cannot be put on a vellum", 0.6, 0.6, 0.6)
-	elseif res.enchant and res.vellumNeed then
-		local vn = res.vellumNode
+	elseif v then
+		local vn = v.node
 		if vn then
 			tt:AddDoubleLine("Vellum: " .. vn.name .. " " .. (SRC_COLOR[vn.src] or "") .. "(" .. SrcLabel(vn) .. ")|r",
-				Money(res.vellum), 1, 1, 1, 1, 1, 1)
-			if vn.src == "craft" then AddKids(tt, vn.kids, 1 / vn.rec.made, "   ") end
-			if res.enchLevel then
-				tt:AddLine("   enchant level restriction " .. res.enchLevel, 0.6, 0.6, 0.6)
-			elseif res.vellumGuess then
+				Money(vn.cost), 1, 1, 1, 1, 1, 1)
+			if vn.src == "craft" then AddKids(tt, vn.rec, vn.kids, 1 / (vn.rec.made or 1), "   ", 2) end
+			if r.lvl then
+				tt:AddLine("   enchant level restriction " .. r.lvl, 0.6, 0.6, 0.6)
+			elseif v.guess then
 				tt:AddLine("   tier guessed from materials, reopen Enchanting to read the level", 0.6, 0.6, 0.6)
 			end
-			if vn.name ~= res.vellumNeed then
-				tt:AddLine("   needs " .. res.vellumNeed .. ", the higher tier is cheaper", 0.6, 0.6, 0.6)
+			if vn.name ~= v.need then
+				tt:AddLine("   needs " .. v.need .. ", the higher tier is cheaper", 0.6, 0.6, 0.6)
 			end
 		else
-			tt:AddDoubleLine("Vellum: " .. res.vellumNeed, "|cffff4040no price|r", 1, 1, 1, 1, 1, 1)
-			if res.enchLevel then tt:AddLine("   enchant level restriction " .. res.enchLevel, 0.6, 0.6, 0.6) end
+			tt:AddDoubleLine("Vellum: " .. v.need, "|cffff4040no price|r", 1, 1, 1, 1, 1, 1)
+			if r.lvl then tt:AddLine("   enchant level restriction " .. r.lvl, 0.6, 0.6, 0.6) end
 		end
 	end
 	tt:AddLine(" ")
 	tt:AddDoubleLine("Materials cost", Money(res.cost), 1, 1, 1, 1, 1, 1)
-	if res.gross then
-		local label
-		if res.vendorSell then label = "Sell price (vendor)"
-		elseif res.scroll then label = res.auc and "Sell price (scroll, auctionator)" or "Sell price (scroll, AH)"
-		elseif res.auc then label = "Sell price (auctionator)"
-		else label = "Sell price (AH)" end
-		tt:AddDoubleLine(label, Money(res.gross), 1, 1, 1, 1, 1, 1)
-		if not res.vendorSell then
-			tt:AddDoubleLine("AH cut (" .. db.cut .. "%)", Money(-(res.gross - res.sell)), 1, 1, 1, 1, 1, 1)
+	if res.sell then
+		local gross = Gross(res)
+		tt:AddDoubleLine("Sell price (" .. res.sellSrc .. ")", Money(gross), 1, 1, 1, 1, 1, 1)
+		if res.sellSrc ~= "vendor" then
+			tt:AddDoubleLine("AH cut (" .. db.cut .. "%)", Money(-(gross - res.sell)), 1, 1, 1, 1, 1, 1)
 		end
 	else
 		tt:AddDoubleLine("Sell price", "|cff888888?|r", 1, 1, 1, 1, 1, 1)
@@ -971,6 +1100,37 @@ local function Fit(f, name, suffix, maxW)
 	return name:sub(1, 1) .. "..." .. suffix
 end
 
+-- Fit() is costly (one SetText + measure per dropped character), so every
+-- shortened text is cached while the window is open.
+local fitCache = {}   -- [maxW] = { [suffix] = { [text] = fitted } }
+local suffixCache = {} -- [made] = " xN" suffix
+local function FitCached(f, name, suffix, maxW)
+	local byW = fitCache[maxW]
+	if not byW then byW = {}; fitCache[maxW] = byW end
+	local bySuffix = byW[suffix]
+	if not bySuffix then bySuffix = {}; byW[suffix] = bySuffix end
+	local t = bySuffix[name]
+	if not t then
+		t = Fit(f, name, suffix, maxW)
+		bySuffix[name] = t
+	end
+	return t
+end
+
+local function MadeSuffix(made)
+	if not made or made <= 1 then return "" end
+	local s = suffixCache[made]
+	if not s then
+		s = " |cff888888x" .. Qty(made) .. "|r"
+		suffixCache[made] = s
+	end
+	return s
+end
+
+function GG:ReleaseUI()
+	fitCache, suffixCache = {}, {}
+end
+
 function GG:CreateWindow()
 	if self.frame then return end
 	local f = CreateFrame("Frame", "GreedyGoblinFrame", UIParent)
@@ -991,6 +1151,7 @@ function GG:CreateWindow()
 		insets = { left = 11, right = 12, top = 12, bottom = 11 },
 	})
 	f:Hide()
+	f:SetScript("OnHide", function() GG:Release() end)
 	table.insert(UISpecialFrames, "GreedyGoblinFrame")
 
 	f.measure = f:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
@@ -1087,7 +1248,7 @@ function GG:CreateWindow()
 	f.empty:SetText("No recipes yet.\nOpen each of your profession windows once so Greedy Goblin can learn them.")
 
 	f.status = f:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-	f.status:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 32, 66)
+	f.status:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 32, 66) -- one foot layout for both modes
 	f.status:SetWidth(800)
 	f.status:SetJustifyH("LEFT")
 
@@ -1142,24 +1303,27 @@ end
 function GG:UpdateList()
 	local f = self.frame
 	if not f then return end
-	local view = self.view or {}
+	local view = self.view or EMPTY
 	FauxScrollFrame_Update(f.scroll, #view, ROWS, ROW_H)
 	local off = FauxScrollFrame_GetOffset(f.scroll)
-	if off > 0 then off = min(off, math.max(0, #view - ROWS)) end
+	if off > 0 then off = min(off, max(0, #view - ROWS)) end
 
 	for i = 1, ROWS do
 		local row, res = f.rows[i], view[off + i]
 		row.res = res
 		if res then
-			local c = row.cols
-			local suffix = res.made > 1 and (" |cff888888x" .. Qty(res.made) .. "|r") or ""
-			c.name:SetText(Fit(f, res.name, suffix, COL_W.name))
-			c.prof:SetText(Fit(f, res.prof, "", COL_W.prof))
+			local c, r = row.cols, res.r
+			c.name:SetText(FitCached(f, r.name, MadeSuffix(r.made), COL_W.name))
+			c.prof:SetText(FitCached(f, r.prof, "", COL_W.prof))
 			c.cost:SetText(Money(res.cost))
-			c.sell:SetText(Money(res.sell) .. (res.vendorSell and " |cff888888v|r" or ""))
+			if res.sellSrc == "vendor" then
+				c.sell:SetText(Money(res.sell) .. " |cff888888v|r")
+			else
+				c.sell:SetText(Money(res.sell))
+			end
 			c.profit:SetText(Money(res.profit))
 			if res.margin then
-				c.margin:SetText((res.margin >= 0 and "|cff55ff55" or "|cffff4040") .. floor(res.margin + 0.5) .. "%|r")
+				c.margin:SetText(format("%s%d%%|r", res.margin >= 0 and "|cff55ff55" or "|cffff4040", floor(res.margin + 0.5)))
 			else
 				c.margin:SetText("|cff888888?|r")
 			end
@@ -1170,7 +1334,7 @@ function GG:UpdateList()
 	end
 
 	if #view == 0 then
-		if (self.search or "") ~= "" and #(self.results or {}) > 0 then
+		if (self.search or "") ~= "" and #(self.results or EMPTY) > 0 then
 			f.empty:SetText("No recipes match your search.")
 		else
 			f.empty:SetText("No recipes yet.\nOpen each of your profession windows once so Greedy Goblin can learn them.")
@@ -1187,9 +1351,9 @@ function GG:UpdateStatus()
 	local txt
 	local count
 	if (self.search or "") ~= "" and self.view then
-		count = format("%d of %d recipes shown", #self.view, #(self.results or {}))
+		count = format("%d of %d recipes shown", #self.view, #(self.results or EMPTY))
 	else
-		count = format("%d recipes", #(self.results or {}))
+		count = format("%d recipes", #(self.results or EMPTY))
 	end
 	if scan then
 		if scan.mode == "unknown" then
@@ -1213,37 +1377,31 @@ function GG:UpdateStatus()
 	f.status:SetText(txt)
 end
 
+local function ShowIf(b, show)
+	if show then b:Show() else b:Hide() end
+end
+
+local function EnableIf(b, on)
+	if on then b:Enable() else b:Disable() end
+end
+
+-- Runs every 0.5 s while the AH is open: no layout changes, no closures.
+-- The Refresh button always lives in the bottom-right corner; only the
+-- own-scan buttons hide in Auctionator mode.
 function GG:UpdateButtons()
 	local f = self.frame
 	if not f then return end
-	-- One foot layout for both modes: the Refresh button now always lives in
-	-- the bottom-right corner, so the window keeps its full height everywhere
-	-- and only the own-scan buttons hide in Auctionator mode.
 	local auct = AuctionatorMode()
-	local function showBtn(b, show)
-		if not b then return end
-		if show then b:Show() else b:Hide() end
-	end
-	showBtn(f.scanBtn, not auct)
-	showBtn(f.unknownBtn, not auct)
-	showBtn(f.clearBtn, not auct)
-	if f.status then
-		f.status:ClearAllPoints()
-		f.status:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 32, 66)
-	end
-	f:SetHeight(672)
+	ShowIf(f.scanBtn, not auct)
+	ShowIf(f.unknownBtn, not auct)
+	ShowIf(f.clearBtn, not auct)
 	local canAll, canQuery = false, false
 	if not auct and self.ahOpen and not scan then
 		local q, a = CanSendAuctionQuery()
 		canQuery, canAll = q and true or false, a and true or false
 	end
-	local function set(b, on)
-		if b then
-			if on then b:Enable() else b:Disable() end
-		end
-	end
-	set(f.scanBtn, canAll)
-	set(f.unknownBtn, canQuery)
+	EnableIf(f.scanBtn, canAll)
+	EnableIf(f.unknownBtn, canQuery)
 end
 
 function GG:Toggle()
@@ -1289,36 +1447,38 @@ SlashCmdList["GREEDYGOBLIN"] = function(msg)
 			else
 				Print("Auctionator mode off: prices come from /gg scan and /gg unknown again.")
 			end
-			GG:Compute()
+			GG:Refresh()
 			GG:UpdateButtons()
 			if GG.frame and GG.frame:IsShown() then GG:UpdateStatus() end
 		else
 			Print("Auctionator mode is " .. (AuctionatorMode() and "on" or "off") .. ". Usage: /gg auctionator on|off")
 		end
 	elseif cmd == "vellum" then
-		GG:Compute()
+		local shown = GG.frame and GG.frame:IsShown()
+		if shown then GG:Compute() else BuildIndex() end
 		Print("Vellum prices (I: no level restriction, II: restriction 35 or lower, III: 60 or lower; a higher tier also works for lower enchants):")
 		for _, kind in ipairs({ "Armor", "Weapon" }) do
 			for t = 1, 3 do
 				local vn = VellumName(kind, t)
-				local opt = VellumOption(kind, t)
-				if opt then
-					DEFAULT_CHAT_FRAME:AddMessage(format("  %s: %s %s(%s)|r", vn, Money(opt.cost), SRC_COLOR[opt.node.src] or "", SrcLabel(opt.node)))
+				local node = VellumOption(kind, t)
+				if node then
+					DEFAULT_CHAT_FRAME:AddMessage(format("  %s: %s %s(%s)|r", vn, Money(node.cost), SRC_COLOR[node.src] or "", SrcLabel(node)))
 				else
 					DEFAULT_CHAT_FRAME:AddMessage(format("  %s: |cff888888no price known|r", vn))
 				end
 			end
 		end
+		if not shown then GG:Release() end
 	elseif cmd == "cut" then
 		local n = tonumber(rest)
 		if not n or n < 0 or n > 50 then Print("Usage: /gg cut <percent>   (5 faction AH, 15 neutral AH)") return end
 		db.cut = n
-		GG:Compute()
+		GG:Refresh()
 		Print("AH cut set to " .. n .. "%.")
 	elseif cmd == "alts" then
 		if rest == "on" or rest == "off" then
 			db.useAlts = (rest == "on")
-			GG:Compute()
+			GG:Refresh()
 			Print("Alt crafting " .. (db.useAlts and "on: recipes of your other characters count as a way to craft materials." or "off: only this character's recipes are used."))
 		else
 			local prefix = GetRealmName() .. "-"
@@ -1338,11 +1498,55 @@ SlashCmdList["GREEDYGOBLIN"] = function(msg)
 		end
 	elseif cmd == "reset" then
 		db.recipes[CharKey()] = nil
-		GG:Compute()
+		GG:Refresh()
 		Print("Forgot the recipes stored for this character.")
 	else
 		Print("/gg  |  /gg scan  |  /gg unknown  |  /gg refresh  |  /gg vellum  |  /gg auctionator on|off  |  /gg alts on|off  |  /gg cut <percent>  |  /gg reset  |  /gg clear")
 	end
+end
+
+------------------------------------------------------------------------
+-- Saved variables v2 -> v3: compact recipes, and drop stored prices of items
+-- no known recipe uses (they were never read).
+------------------------------------------------------------------------
+local function MigrateV2()
+	local names = db.names
+	for _, profs in pairs(db.recipes) do
+		for _, list in pairs(profs) do
+			for i, old in ipairs(list) do
+				if old.reagents then
+					local r = {}
+					for _, rg in ipairs(old.reagents) do
+						r[#r + 1] = rg.id
+						r[#r + 1] = rg.n
+						if rg.name then names[rg.id] = rg.name end
+					end
+					r.name, r.prof, r.product = old.name, old.prof, old.product
+					if old.made and old.made ~= 1 then r.made = old.made end
+					if not old.product then r.lvl = old.lvl end
+					list[i] = r
+				end
+			end
+		end
+	end
+
+	local ids, scrolls = RelevantItems() -- every realm
+	for id in pairs(db.vendor) do
+		if not ids[id] then db.vendor[id] = nil end
+	end
+	local scrollIds = {}
+	for name, id in pairs(db.scrolls) do
+		if scrolls[name] then scrollIds[id] = true else db.scrolls[name] = nil end
+	end
+	for _, d in pairs(db.ah) do
+		local n = 0
+		for id in pairs(d.p) do
+			if ids[id] or scrollIds[id] then n = n + 1 else d.p[id] = nil end
+		end
+		d.n = n
+	end
+	scrollName = {}
+	db.v = DB_VERSION
 end
 
 ------------------------------------------------------------------------
@@ -1351,15 +1555,18 @@ end
 local learnAt, learnTries
 local frame = CreateFrame("Frame")
 
+-- The OnUpdate only runs while the frame is shown, and the frame is only
+-- shown while there is work: the AH is open, a scan runs, or a recipe learn
+-- is pending. Otherwise the addon costs nothing per frame.
 local btnTimer = 0
-frame:SetScript("OnUpdate", function(_, elapsed)
+frame:SetScript("OnUpdate", function(self, elapsed)
 	local now = GetTime()
 	btnTimer = btnTimer - elapsed
 	if btnTimer <= 0 then
 		btnTimer = 0.5
-		if db and GG.ahOpen then
+		if db and GG.ahOpen and GG.frame and GG.frame:IsShown() then
 			GG:UpdateButtons()
-			if not scan and GG.frame and GG.frame:IsShown() then GG:UpdateStatus() end
+			if not scan then GG:UpdateStatus() end
 		end
 	end
 	if learnAt and now >= learnAt then
@@ -1368,11 +1575,13 @@ frame:SetScript("OnUpdate", function(_, elapsed)
 			learnTries = learnTries + 1
 			if learnTries <= 3 then learnAt = now + 0.7 end
 		else
-			if GG.frame and GG.frame:IsShown() then GG:Compute() end
+			GG:Refresh()
 		end
 	end
 	if scan then ScanTick(now) end
+	if not (scan or learnAt or GG.ahOpen) then self:Hide() end
 end)
+frame:Hide()
 
 frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("TRADE_SKILL_SHOW")
@@ -1384,17 +1593,20 @@ frame:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
 frame:SetScript("OnEvent", function(_, event, arg1)
 	if event == "ADDON_LOADED" then
 		if arg1 ~= "GreedyGoblin" then return end
-		if type(GreedyGoblinDB) ~= "table" or GreedyGoblinDB.v ~= DB_VERSION then
+		local sv = GreedyGoblinDB
+		if type(sv) ~= "table" or (sv.v ~= DB_VERSION and sv.v ~= 2) then
 			GreedyGoblinDB = { v = DB_VERSION }
 		end
 		db = GreedyGoblinDB
 		db.cut     = db.cut or 5
 		db.vendor  = db.vendor or {}   -- [itemID] = copper per unit
 		db.scrolls = db.scrolls or {}  -- [scroll name] = itemID, learned from AH scans
-		db.vellums = db.vellums or {}  -- no longer used (vellums are tracked by item id)
+		db.names   = db.names or {}    -- [itemID] = item name of every reagent
+		db.vellums = nil   -- no longer used (vellums are tracked by item id)
 		db.vendorNPC = nil -- no longer tracked: vendor prices only, no names
 		db.ah      = db.ah or {}       -- [realm] = { t = time, n = items, p = { [itemID] = lowest unit buyout } }
-		db.recipes = db.recipes or {}  -- [realm-char] = { [profession] = { recipe, ... } }
+		db.recipes = db.recipes or {}  -- [realm-char] = { [profession] = { recipe, ... } } (format at the top)
+		if db.v == 2 then MigrateV2() end
 		LogLoad("/gg to open, /gg scan at the auction house.")
 		if db.auctMode == nil then
 			-- first install: pick the price source once and tell the player
@@ -1425,12 +1637,14 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 
 	elseif event == "TRADE_SKILL_SHOW" then
 		learnAt, learnTries = GetTime() + 0.6, 0
+		frame:Show()
 
 	elseif event == "MERCHANT_SHOW" then
 		RecordVendor()
 
 	elseif event == "AUCTION_HOUSE_SHOW" then
 		GG.ahOpen = true
+		frame:Show()
 		GG:UpdateButtons()
 
 	elseif event == "AUCTION_HOUSE_CLOSED" then
